@@ -25,9 +25,10 @@ class SubtitleControls(ttk.Frame):
                         command=on_change).grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(self, text="Font").grid(row=1, column=0, sticky="w", pady=3)
         fonts = sorted(set(myanmar_fonts()) | {self.saved["font"]})
-        combo = ttk.Combobox(self, textvariable=self.variables["font"], values=fonts, state="readonly", width=18)
-        combo.grid(row=1, column=1, sticky="ew", pady=3)
-        combo.bind("<<ComboboxSelected>>", lambda _e: on_change())
+        self.font_combo = ttk.Combobox(self, textvariable=self.variables["font"], values=fonts,
+                                       state="readonly", width=18)
+        self.font_combo.grid(row=1, column=1, sticky="ew", pady=3)
+        self.font_combo.bind("<<ComboboxSelected>>", lambda _e: on_change())
         self._number(2, "Size (px)", "size", 12, 144)
         ttk.Checkbutton(self, text="Bold", variable=self.variables["bold"], command=on_change).grid(
             row=3, column=0, columnspan=2, sticky="w")
@@ -71,6 +72,15 @@ class SubtitleControls(ttk.Frame):
         if value:
             self.variables[key].set(value)
             self.on_change()
+
+    def set_font_choices(self, families) -> None:
+        """Switch the font list between Myanmar fonts and Latin fonts for the output language."""
+        options = sorted({str(f) for f in families if str(f).strip()})
+        if not options:
+            return
+        self.font_combo.configure(values=options)
+        if self.variables["font"].get() not in options:
+            self.variables["font"].set(options[0])
 
     def values(self):
         values = {key: var.get() for key, var in self.variables.items()}

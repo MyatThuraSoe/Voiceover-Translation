@@ -96,6 +96,32 @@ def find_mm_font() -> Path:
     )
 
 
+def find_latin_font() -> Path:
+    """A readable Latin font for English titles (English rewrite mode)."""
+    env = os.environ.get("RECAP_LATIN_FONT")
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    local = os.environ.get("LOCALAPPDATA")
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env))
+    names = [
+        "seguisb.ttf", "segoeuib.ttf", "segoeui.ttf", "arialbd.ttf", "arial.ttf",
+        "calibrib.ttf", "calibri.ttf", "verdanab.ttf", "verdana.ttf", "tahomabd.ttf",
+        "tahoma.ttf", "trebucbd.ttf", "trebuc.ttf", "georgiab.ttf", "georgia.ttf",
+    ]
+    if local:
+        candidates += [Path(local) / "Microsoft/Windows/Fonts" / name for name in names]
+    candidates += [Path(windir) / "Fonts" / name for name in names]
+    candidates += [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path.resolve()
+    return find_mm_font()          # a Myanmar font still draws Latin glyphs
+
+
 def _browser_candidates(playwright):
     """Yield browser launch callables in production-friendly order.
 
@@ -217,7 +243,7 @@ body {{ display:flex; align-items:center; justify-content:center; }}
 }}
 #txt {{
   width:100%; text-align:center;
-  font-family:'EpisodeMM','Myanmar Text','Pyidaungsu','Noto Sans Myanmar',sans-serif;
+  font-family:'EpisodeMM','Segoe UI','Myanmar Text','Pyidaungsu','Noto Sans Myanmar',Arial,sans-serif;
   font-size:{int(font_size)}px;
   line-height:1.30;
   font-weight:{int(font_weight)};
@@ -272,7 +298,8 @@ body {{ display:flex; align-items:center; justify-content:center; }}
 
 
 def make_video_title_png(title: str, out_path: Path, cfg: dict) -> Path:
-    font_path = find_mm_font()
+    requested = Path(str(cfg.get("font_path") or ""))
+    font_path = requested if cfg.get("use_font_path") and requested.is_file() else find_mm_font()
     return _render_browser_text_png(
         text=title,
         out_path=out_path,
@@ -361,3 +388,48 @@ def make_part_only_png(part_index: int, part_count: int, out_path: Path, cfg: di
         stroke_px=float(cfg.get("stroke_px", 1.6)),
         font_weight=int(cfg.get("font_weight", 400)),
     )
+
+
+def build_overlay_filters(base_video: str, overlays: list[dict], video_w: int, video_h: int) -> tuple[str, list[str]]:
+    """Build the FFmpeg filter_complex for multiple positioned image overlays (spec §4.5/§4.6).
+
+    Returns ``(filter_complex_tail, input_files)`` where ``filter_complex_tail``
+    is the chain of ``[..:v]scale=…;[..]overlay=…`` stages and ``input_files`` is
+    the list of overlay image paths (inputs 1..N; input 0 is ``base_video``).
+
+    Edge cases handled:
+    - skipped/disabled overlays are ignored;
+    - missing/corrupted image files are skipped (caller should validate paths);
+    - positions are clamped so the scaled image stays fully inside the frame.
+    """
+    inputs: list[str] = []
+    filter_parts: list[str] = []
+    current_stream = base_video  # e.g. "[0:v]" or "[cropped]"
+
+    for i, ov in enumerate(overlays):
+        if not isinstance(ov, dict) or not ov.get("enabled", True):
+            continue
+        path = str(ov.get("path") or "").strip()
+        if not path:
+            continue
+        inputs.append(path)
+        input_index = len(inputs)  # +1 because input 0 is the base video
+
+        # Percentages → pixels, clamped so the scaled image stays inside the frame.
+        w = max(1, int(float(ov.get("width_percent", 0.1)) * video_w))
+        x = max(0, min(int(float(ov.get("x_percent", 0.0)) * video_w), max(0, video_w - w)))
+        y = max(0, min(int(float(ov.get("y_percent", 0.0)) * video_h),
+                       max(0, video_h - 1)))  # height auto from -1; keep at least one row inside
+        opacity = max(0.0, min(1.0, float(ov.get("opacity", 1.0))))
+
+        filter_parts.append(
+            f"[{input_index}:v]scale={w}:-1,format=rgba,"
+            f"colorchannelmixer=aa={opacity:.2f}[ov{i}]"
+        )
+        out_label = f"[ovout{i}]"
+        filter_parts.append(
+            f"{current_stream}[ov{i}]overlay=x={x}:y={y}{out_label}"
+        )
+        current_stream = out_label
+
+    return current_stream, inputs

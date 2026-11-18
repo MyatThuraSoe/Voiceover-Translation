@@ -15,7 +15,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from core import normalize_segments, segment_basename
-from recap_planner import _foreign_letters, _latin_words, _note_text
+from recap_planner import _latin_words, _note_text, _stray_letters
 
 _FAILED_SEGMENT_RE = re.compile(r"FAILED at segment\s+(\d+)", re.IGNORECASE)
 _MIXED_DIGITS_RE = re.compile(r"[၀-၉][0-9]|[0-9][၀-၉]")
@@ -27,14 +27,23 @@ def failed_segment_from_error(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def narration_problems(text: str) -> list[str]:
+def narration_problems(text: str, target_language: str = "mm") -> list[str]:
+    target = str(target_language or "mm").lower()
+    if target == "en":
+        issues = []
+        letters = _stray_letters(text, "en")
+        if letters:
+            issues.append("letters of another script: " + " ".join(letters))
+        if _note_text(text, "en"):
+            issues.append("a note about IDs instead of narration")
+        return issues
     issues = []
     if _latin_words(text):
         issues.append("English words: " + ", ".join(_latin_words(text)[:6]) + " (write them in Burmese)")
-    letters = _foreign_letters(text)
+    letters = _stray_letters(text, "mm")
     if letters:
         issues.append("letters of another script: " + " ".join(letters))
-    if _note_text(text):
+    if _note_text(text, "mm"):
         issues.append("a note about IDs instead of narration")
     if _MIXED_DIGITS_RE.search(str(text or "")):
         issues.append("mixed Myanmar/Latin digits (e.g. ၂၀0၁)")
@@ -165,6 +174,7 @@ class NarrationEditor(tk.Toplevel):
 
         self.plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
         self.segments = normalize_segments(self.plan)
+        self.target_language = str(self.plan.get("target_language") or "mm").lower()
         self.index = 1
         self.loaded_text = ""
 
@@ -202,7 +212,8 @@ class NarrationEditor(tk.Toplevel):
                                   relief="flat", padx=8, pady=6, font=("Segoe UI", 11))
         self.source_box.pack(fill="x", padx=10)
 
-        tk.Label(self, text="Burmese narration (editable)", bg=self.bg, fg=self.fg, anchor="w",
+        tk.Label(self, text=("English narration (editable)" if self.target_language == "en"
+                             else "Burmese narration (editable)"), bg=self.bg, fg=self.fg, anchor="w",
                  font=("Segoe UI Semibold", 10)).pack(fill="x", padx=10, pady=(10, 2))
         # The buttons and the problem line are packed at the bottom FIRST: the text box takes only
         # the room that is left, so Save / Revert / Close are never cut off on a small window.
@@ -222,15 +233,16 @@ class NarrationEditor(tk.Toplevel):
         self.native_box: NativeTextBox | None = None
         holder = tk.Frame(self, bg=self.panel, height=160)
         holder.pack(fill="both", expand=True, padx=10)
+        edit_font = "Segoe UI" if self.target_language == "en" else "Myanmar Text"
         try:
-            self.native_box = NativeTextBox(holder, font="Myanmar Text", size_pt=14, bg=self.panel, fg=self.fg)
+            self.native_box = NativeTextBox(holder, font=edit_font, size_pt=14, bg=self.panel, fg=self.fg)
             self._last_seen = ""
             self.after(400, self._watch_native)
         except Exception:  # not Windows / RichEdit missing: Tk's own box (Myanmar caret may be off)
             self.native_box = None
             self.text_box = tk.Text(holder, height=7, wrap="word", bg=self.panel, fg=self.fg,
                                     insertbackground=self.fg, relief="flat", padx=8, pady=6,
-                                    font=("Myanmar Text", 14), undo=True)
+                                    font=(edit_font, 14), undo=True)
             self.text_box.pack(fill="both", expand=True)
             self.text_box.bind("<KeyRelease>", lambda _e: self._refresh_problems())
 
@@ -294,8 +306,10 @@ class NarrationEditor(tk.Toplevel):
         self._refresh_problems()
 
     def _refresh_problems(self) -> None:
-        problems = narration_problems(self._current_text())
-        self.problem_var.set(("⚠️ " + " · ".join(problems)) if problems else "✅ No English words / script problems found")
+        problems = narration_problems(self._current_text(), self.target_language)
+        okay = ("No script problems found" if self.target_language == "en"
+                else "No English words / script problems found")
+        self.problem_var.set(("⚠️ " + " · ".join(problems)) if problems else "✅ " + okay)
         self.problem_label.configure(fg="#ff8c8c" if problems else "#7ddc9a")
 
     def _go(self) -> None:
@@ -317,7 +331,7 @@ class NarrationEditor(tk.Toplevel):
         total = len(self.segments)
         for offset in range(1, total + 1):
             target = (self.index - 1 + offset) % total + 1
-            if narration_problems(self.segments[target - 1]["narration"]):
+            if narration_problems(self.segments[target - 1]["narration"], self.target_language):
                 self._show(target)
                 return
         messagebox.showinfo("Next problem", "ပြဿနာရှိတဲ့ segment မတွေ့တော့ပါ။", parent=self)

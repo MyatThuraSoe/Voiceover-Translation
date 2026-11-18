@@ -1,13 +1,20 @@
-# Recap → Myanmar (+ Splitter)
+# Recap → Myanmar / English (+ Splitter)
 
 **English၊ တရုတ်၊ ဟိန္ဒီ၊ ကိုရီးယား … ဘယ်ဘာသာနဲ့ ပြောထားတဲ့ recap / ဇာတ်လမ်းပြော video ကိုမဆို မြန်မာအသံနဲ့ ပြန်ထုတ်ပေးတဲ့ Windows tool**
-Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar) · Smart Sync
+Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · Smart Sync
+**Output** — Myanmar (ဘာသာပြန်) (သို့) English (English စကားလုံးပြောင်း၊ ဘာသာမပြန်)
 **Splitter** tab — ရှည်တဲ့ video ကို မိနစ်အလိုက် အပိုင်းခွဲ (Ratio + blur နောက်ခံ၊ စာ၊ Part နံပါတ်)
 
 > English: turns a recap/story video narrated in English, Chinese, Hindi, Korean … (detected by itself)
-> into the same video narrated in Myanmar (Burmese). The Myanmar voice leads, and the picture of every
-> line is re-timed to it ("Smart Sync"). A second tab, **Splitter**, cuts long videos into parts.
+> into the same video narrated in Myanmar (Burmese). With **Output = English** an English video keeps
+> its meaning but gets fresh English wording, narrated by an Edge English voice (default
+> `en-GB-RyanNeural`). The narrator voice leads, and the picture of every line is re-timed to it
+> ("Smart Sync"). A second tab, **Splitter**, cuts long videos into parts.
 > See the [English section](#english) below.
+>
+> **Desktop installer:** `dist\RecapUpgradeSetup.exe` (per-user, no admin required).
+> Rebuild with `build_exe.bat` ([BUILD_EXE.md](BUILD_EXE.md)). The portable zip is
+> `dist\RecapUpgrade-win64.zip`.
 
 ---
 
@@ -19,16 +26,16 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar) · Smart Sync
    - ဟိန္ဒီနဲ့ Urdu က အသံတူလို့ Auto-detect မှာ Urdu ထွက်ရင် ဟိန္ဒီအဖြစ် ရေးတယ်။
 2. **အပိုင်းခွဲ** — စာကြောင်း၊ အပိုဒ်၊ အသံရပ်တဲ့နေရာတွေမှာ ခွဲပြီး အပိုင်းတိုင်းကို ၄.၂ စက္ကန့်လောက် (အများဆုံး ၅.၆ စက္ကန့်) ထားတယ်။ အပိုင်းများလေ ရုပ်နဲ့ အသံ ပိုကိုက်လေပါ။
 3. **ဇာတ်လမ်း မှတ်ဉာဏ်** — Gemini က ဇာတ်လမ်းတစ်ခုလုံးကို အရင်ဖတ်ပြီး ဇာတ်ကောင်နာမည်၊ ဆက်နွယ်မှု၊ နေရာတွေကို မှတ်ထားတယ်။ ဒါကြောင့် နာမည်တွေ တစ်ပုဒ်လုံး တစ်မျိုးတည်း ဖြစ်တယ်။
-4. **ဘာသာပြန်** — Gemini က တစ်ခါမှာ အပိုင်း ၄၀ စီ မြန်မာလို ပြန်တယ်။
+4. **ဘာသာပြန် / စကားလုံးပြောင်း** — **Output = Myanmar** ဆို Gemini က တစ်ခါမှာ အပိုင်း ၄၀ စီ မြန်မာလို ပြန်တယ်။ **Output = English** ဆိုရင် ဘာသာမပြန်ဘဲ English စကားလုံးနဲ့ စာကြောင်းဖွဲ့ပုံကို ပြောင်းပြီး အဓိပ္ပာယ်ကို အတိအကျ ထိန်းထားတယ် (English video အတွက်ပဲ)။
    - ဇာတ်ကြောင်းပြောသူလို သဘာဝကျတဲ့ စကားပြောပုံစံနဲ့ ပြန်တယ်။
    - အကျဉ်းမချုပ်ဘူး၊ ချန်မထားဘူး။ အပိုင်းတစ်ခုရဲ့ အကြောင်းအရာကို ဘေးအပိုင်းထဲ မရွှေ့ဘူး။
    - ပြန်ပြီးတိုင်း စစ်ဆေးတဲ့အဆင့် (audit) က ချန်ခဲ့တာ၊ နေရာလွဲတာ၊ ထပ်နေတာတွေကို ပြန်ပြင်တယ်။
    - မြန်မာစာလုံးထဲ တခြားဘာသာ စာလုံး ညှပ်ဝင်လာရင် (ဥပမာ "ဧည့်ခန်း" နေရာမှာ "မისခန်း") Gemini ကို ပြန်မေးတယ်။
-5. **အသံထုတ်** — Edge TTS မြန်မာအသံ (Thiha ယောက်ျားသံ / Nilar မိန်းမသံ) နဲ့ ထုတ်တယ်။ "Short pauses" ဖွင့်ထားရင် Edge ထည့်တတ်တဲ့ အသံတိတ်ကို ဖြတ်လို့ စာကြောင်းကြားမှာ ~၀.၂၅ စက္ကန့်ပဲ နားတယ်။
+5. **အသံထုတ်** — Edge TTS အသံနဲ့ ထုတ်တယ်။ Myanmar output ဆို Thiha ယောက်ျားသံ / Nilar မိန်းမသံ။ English output ဆို `en-GB-RyanNeural` (English UK၊ default) အပြင် en-US / en-AU / en-CA / en-IE / en-IN … English အသံ ၃၇ မျိုး ရွေးလို့ရတယ်။ "Short pauses" ဖွင့်ထားရင် Edge ထည့်တတ်တဲ့ အသံတိတ်ကို ဖြတ်လို့ စာကြောင်းကြားမှာ ~၀.၂၅ စက္ကန့်ပဲ နားတယ်။
 6. **Smart Sync** — မြန်မာအသံက အချိန်ကို ဦးဆောင်ပြီး ရုပ်က လိုက်ညှိတယ်။ အသေးစိတ်ကို [Smart Sync ဘယ်လိုအလုပ်လုပ်လဲ](#smart-sync-ဘယ်လိုအလုပ်လုပ်လဲ) မှာ ကြည့်ပါ။
 7. **ဖြည့်စွက်** — Blur box (မူရင်း watermark/စာတန်းဖုံးဖို့)၊ Title၊ Logo၊ Extra text၊ Zoom၊ Flip တွေကို preview ပေါ်မှာ နေရာချပြီး ထည့်လို့ရတယ်။ Video အချိုး (**16:9 / 9:16 / 1:1 / Original**) ကိုလည်း ရွေးလို့ရတယ်။
 
-ထွက်လာတဲ့ video မှာ **မြန်မာအသံပဲ** ပါတယ်။ မူရင်း English အသံနဲ့ နောက်ခံသီချင်း မပါဘူး။
+ထွက်လာတဲ့ video မှာ ရွေးထားတဲ့ **narrator အသံပဲ** ပါတယ် (Myanmar သို့မဟုတ် English)။ မူရင်း အသံနဲ့ နောက်ခံသီချင်း မပါဘူး။
 
 ## လိုအပ်တာ
 
@@ -67,8 +74,8 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar) · Smart Sync
 
 | နေရာ | လုပ်ရမယ့်အရာ |
 |---|---|
-| အပေါ် | **Source Video → Browse** နဲ့ video ကို ရွေးပါ။ **Folder** နှိပ်ရင် folder ထဲက video တွေကို တစ်ခုပြီးတစ်ခု လုပ်ပါတယ် (ပြီးပြီးသား video တွေကို ကျော်ပါတယ်)။ **Gemini .env** မှာ `.env` ဖိုင်ကို ရွေးပါ (default က ဒီ folder ထဲက `.env`)။ **Save final to** — folder ရွေးထားရင် ပြီးတဲ့ video ကို `<video နာမည်>_Myanmar.mp4` နဲ့ အဲ့ folder ထဲ ထည့်ပေးပါတယ် (ဗလာထားရင် job folder ထဲမှာပဲ)။ |
-| ဘယ်ဘက် | **Source language** (Auto-detect / English / Chinese / Hindi / Korean / …)၊ **Edge TTS Voice** (`my-MM-ThihaNeural` / `my-MM-NilarNeural`) နဲ့ **Edge TTS Speed** (−50% … +100%) ကို ရွေးပါ။ အောက်က **Run Logs** မှာ အလုပ်လုပ်နေတာတွေ ပြပါတယ်။ |
+| အပေါ် | **Source Video → Browse** နဲ့ video ကို ရွေးပါ။ **Folder** နှိပ်ရင် folder ထဲက video တွေကို တစ်ခုပြီးတစ်ခု လုပ်ပါတယ် (ပြီးပြီးသား video တွေကို ကျော်ပါတယ်)။ **Gemini .env** မှာ `.env` ဖိုင်ကို ရွေးပါ (default က ဒီ folder ထဲက `.env`)။ **Save final to** — folder ရွေးထားရင် ပြီးတဲ့ video ကို `<video နာမည်>_Myanmar.mp4` (သို့) `<video နာမည်>_English.mp4` နဲ့ အဲ့ folder ထဲ ထည့်ပေးပါတယ် (ဗလာထားရင် job folder ထဲမှာပဲ)။ |
+| ဘယ်ဘက် | **Source language** (Auto-detect / English / Chinese / Hindi / Korean / …)၊ **Output** (**Myanmar · translate** သို့မဟုတ် **English · rewrite**)၊ **Narrator Voice** (Myanmar ဆို `my-MM-ThihaNeural` / `my-MM-NilarNeural`၊ English ဆို `en-GB-RyanNeural` အစရှိတဲ့ English အသံများ) နဲ့ **Speed** (−50% … +100%) ကို ရွေးပါ။ အောက်က **Run Logs** မှာ အလုပ်လုပ်နေတာတွေ ပြပါတယ်။ |
 | အလယ် | **Preview** — slider နဲ့ `◀ 5s` / `5s ▶` နဲ့ ကြည့်ချင်တဲ့ အချိန်ကို ရွှေ့ပြီး **Refresh Frame** နှိပ်ပါ။ Title၊ Logo၊ Extra text ကို ဆွဲရွှေ့ပြီး နေရာချလို့ရပါတယ်။ Blur box ကို ဆွဲလို့ရပါတယ်။ |
 | ညာဘက် | **Production Tools** — Zoom (1.00–1.25×)၊ Flip (ဘယ်ညာ ပြောင်းပြန်)၊ Voice vol (50–300%)၊ Short pauses၊ **Ratio** (16:9 / 9:16 / 1:1 / Original) နဲ့ **Fill** (Blur background / Black bars / Crop to fill)၊ **+ Draw Blur Box** / Delete Selected၊ Title (စာ၊ အရွယ်)၊ Logo (ဖိုင်၊ အရွယ်၊ အလင်းဖောက်မှု)၊ Extra Text Box။ |
 | အောက်ခြေ | **START / RESUME** — စတယ် (ရပ်ထားတာဆိုရင် ဆက်လုပ်တယ်)။ **STOP SAFELY** — အခု လုပ်နေတဲ့ အဆင့်ပြီးမှ ရပ်ပြီး လုပ်ပြီးသမျှ သိမ်းထားတယ်။ **Open Job Folder** — ထွက်လာတဲ့ ဖိုင်တွေ ဖွင့်ကြည့်ဖို့။ **Edit Text** — မြန်မာ narration ကို စာကြောင်းလိုက် ပြင်ဖို့ (အောက်မှာ ကြည့်ပါ)။ |
@@ -110,12 +117,23 @@ Window ထိပ်က **Splitter** tab ကို နှိပ်ပါ။ ရ�
 - Key တစ်ခုရဲ့ ဒီနေ့ quota ကုန်ရင် နောက် key ကို ပြောင်းသုံးပါတယ်။ အကုန်ကုန်ရင် ရပ်ပြီး ပြီးသားစာကြောင်းတွေ သိမ်းထားလို့
   မနက် START/RESUME နှိပ်ရင် ကျန်တာပဲ ဆက်လုပ်ပါတယ်။ VPN လိုပါတယ် (Gemini က မြန်မာကနေ တိုက်ရိုက် မရ)။
 
+## English စကားလုံးပြောင်းမုဒ် (English → English)
+
+**ဘာသာမပြန်ဘဲ** English video ကို English လိုပဲ ပြန်ပြောစေချင်ရင် **Output** မှာ **English · rewrite** ကို ရွေးပါ။
+- **အဓိပ္ပာယ်၊ အဖြစ်အပျက်၊ နာမည်၊ ဂဏန်း၊ dialogue အားလုံး မပြောင်း** — စကားလုံးနဲ့ စာကြောင်းဖွဲ့ပုံပဲ ပြောင်းတယ်။ အကျဉ်းမချုပ်ဘူး၊ ဖြည့်မပြောဘူး။
+- **English video ပဲ ရတယ်** — Source language မှာ English (သို့) Auto-detect ထားပါ။ တခြားဘာသာ video ကို English မုဒ်နဲ့ စတင်ရင် ရပ်ပြီး "English mode rewrites an English video" လို့ ပြပါတယ်။ (အဲ့ဒါဆို Output ကို Myanmar ပြောင်းပြီး ဘာသာပြန်ပါ။)
+- **အသံ** — default `en-GB-RyanNeural` (English UK)။ Voice စာရင်းမှာ en-GB / en-US / en-AU / en-CA / en-IE / en-IN / en-NZ / en-ZA / en-HK / en-KE / en-NG / en-PH / en-SG / en-TZ (ယောက်ျား/မိန်း) ၃၇ မျိုး ရှိတယ်။
+- en-GB အသံရွေးရင် British spelling / idiom ကို သုံးပါတယ်။
+- **စာတန်း** — English စာတန်းက English ဖောင့် (Segoe UI အစရှိတဲ့ Latin font) နဲ့ ထုတ်ပြီး ကွင်းစကွင်းပိတ် ( ) ကို မဖျက်ပါ (Myanmar မုဒ်မှာတော့ English gloss ကို ဖျက်တယ်)။ Title / Extra text ကလည်း Latin font နဲ့ပဲ ပေါ်တယ်။
+- ထွက်လာတဲ့ ဖိုင် — `<video နာမည်>_English.mp4` (Save final to ရွေးထားရင်)။
+- Checkpoint က Myanmar မုဒ်နဲ့ သီးသန့်ဖြစ်လို့ မုဒ်တစ်ခုကနေ နောက်တစ်ခုကို ပြောင်းရင် ဘာသာပြန် / rewrite အသစ် ပြန်လုပ်ပါတယ် (Whisper transcript ကို ပြန်သုံးတယ်)။
+
 ## စာတန်း (Narration Subtitle) နဲ့ Video quality
 
 **Narration Subtitle** (ညာဘက် Production Tools အောက်ဆုံး) — အသံပြောနေတဲ့ မြန်မာစာကို video ပေါ်မှာ စာတန်းအဖြစ် ထည့်ပေးပါတယ်။
 - Font (စက်ထဲမှာ ရှိတဲ့ မြန်မာ font တွေ)၊ အရွယ်၊ Bold၊ စာလုံးအရောင်၊ အနားကွပ် (Outline)၊ အရိပ်၊ နောက်ခံ box အရောင် / opacity၊ အကျယ်
   ရွေးလို့ရပါတယ်။ Preview ပေါ်မှာ ဆွဲရွှေ့ပြီး နေရာ ချထားပါ။
-- စာကြောင်းရှည်ရင် ၂ ကြောင်းစီ ကတ်တွေ ခွဲပြီး အသံနဲ့ အချိန်ကိုက် ပြပါတယ်။ ကွင်းထဲက English (ဥပမာ "(Zombie)") ကို မပြပါ။
+- စာကြောင်းရှည်ရင် ၂ ကြောင်းစီ ကတ်တွေ ခွဲပြီး အသံနဲ့ အချိန်ကိုက် ပြပါတယ်။ Myanmar output မှာ ကွင်းထဲက English gloss (ဥပမာ "(Zombie)") ကို မပြပါ။ English output မှာတော့ ကွင်းစကွင်းပိတ်အတိုင်း ပြပါတယ်။
 - SRT ဖိုင်ကိုလည်း ထုတ်ပေးပါတယ် — `SRT_for_upload\` folder ထဲမှာ (video ဘေးမှာ မထားပါ၊ နာမည်တူ .srt ရှိရင် VLC / PotPlayer က
   စာတန်း ၂ ထပ် ပြလို့ပါ)။ Subtitle ပိတ်ထားလည်း SRT ထုတ်ပေးပါတယ် (upload လုပ်ဖို့)။
 
@@ -176,6 +194,7 @@ Tool ဖွင့်ပြီး START နှိပ်လိုက်ရင် `
 | `title_font_path` | `C:\Windows\Fonts\mmrtext.ttf` | Title / Extra text ဖောင့် |
 | `overlay_blur_strength` | `18` | Blur box ရဲ့ ဝါးအား |
 | `whisper_model_other` | `medium` | English မဟုတ်တဲ့ ဘာသာအတွက် Whisper model (NVIDIA GPU မရှိတဲ့ စက်မှာ `small` က ပိုမြန်တယ်) |
+| `target_language` | `mm` | `mm` = မြန်မာလို ဘာသာပြန် · `en` = English စကားလုံးပြောင်း (UI က Output ရွေးချယ်မှုကို သိမ်းထားတယ်) |
 
 ## စာကြောင်း ခွဲပုံ
 
@@ -202,6 +221,7 @@ English စာကို **စာကြောင်း (sentence) တစ်ကြ
 | `403, message='Invalid response status'` (`WSServerHandshakeError`) | Microsoft ရဲ့ အသံ service က ချိတ်ဆက်မှုကို ငြင်းတာပါ — VPN / proxy server တော်တော်များများကို ငြင်းပါတယ်။ **VPN ဖွင့်ထားရင် ပိတ်ပါ** (သို့) server ပြောင်းပါ။ ကွန်ပျူတာ နာရီ/Time zone ကို Settings → Time & language → Set time automatically နဲ့ မှန်အောင်ထားပါ။ မရသေးရင် `INSTALL_REQUIREMENTS.bat` ကို ပြန် run ပါ (edge-tts ကို update လုပ်ပါတယ်)။ ပြီးရင် **START / RESUME**။ VPN မပါရင် မရတဲ့ network ဆိုရင် `.env` ထဲမှာ `EDGE_TTS_PROXY=http://127.0.0.1:<port>` ထည့်ပါ။ |
 | `Whisper က … စကားကို ကောင်းကောင်း မကြားရပါဘူး` (သို့) `whisper_transcript.txt` ထဲမှာ "I'm not going to do it." လို စာကြောင်း တူတူတွေ ထပ်ခါထပ်ခါ ရေးထားတယ် | Whisper က ဘာသာ မှားပြီး နားထောင်နေတာပါ (ဥပမာ ဟိန္ဒီ video ကို English လို)။ **Source language** မှာ မှန်တဲ့ ဘာသာကို ရွေးပြီး (သို့) Auto-detect နဲ့ **START / RESUME** ပြန်နှိပ်ပါ။ ဘာသာ မှန်ပါလျက် ဒီ error တက်ရင် `whisper_transcript.txt` ကို စစ်ပါ (သီချင်း / ဆူညံသံ များတာ ဖြစ်နိုင်ပါတယ်)။ ဘာသာပြန်မစခင် ရပ်တာမို့ Gemini quota မကုန်ပါဘူး။ |
 | `The video already speaks Burmese` | Auto-detect က မြန်မာစကားလို့ ကြားတာပါ။ မှားရင် Source language မှာ ရွေးပါ။ |
+| English mode မှာ `English mode rewrites an English video` | တခြားဘာသာ video ကို Output = English နဲ့ စမ်းတာပါ။ Source language မှာ English ရွေးပါ (သို့) Output ကို Myanmar (translate) ပြောင်းပါ။ |
 | Gemini `User location is not supported for the API use` | Gemini က ကိုယ့် internet (VPN server) ရဲ့ နိုင်ငံကို လက်မခံတာပါ။ VPN server (နိုင်ငံ) ပြောင်းပြီး **START / RESUME** ပြန်နှိပ်ပါ။ |
 | `Edge TTS FAILED at segment 123` | အဲ့စာကြောင်းမှာ အသံ မထွက်လို့ ရပ်တာပါ။ **Yes** နှိပ်ရင် Edit Text ပွင့်လာပါမယ် — မြန်မာလို ပြင်ပြီး Save → **START / RESUME**။ |
 | `Gemini JSON response failed after 3 attempts` | Gemini ရဲ့ အဖြေ ပျက်နေတာပါ။ **START / RESUME** ပြန်နှိပ်ရင် ဆက်လုပ်ပါတယ်။ (Story context အဆင့်မှာဆိုရင် အခု version က အဲ့အပိုင်းကို ချန်ပြီး ဆက်သွားလို့ မရပ်တော့ပါ။) |
@@ -226,7 +246,7 @@ app/
   splitter.py              Splitter: ဘယ်မှာ ဖြတ်မလဲ (smart cut)၊ အပိုင်း render
   splitter_tab.py          Splitter tab UI
   subtitle_png.py          Narration subtitle: Chromium နဲ့ စာတန်းပုံ (PNG) ထုတ်၊ အချိန်ကိုက်၊ SRT
-  subtitle_fonts.py        စက်ထဲက မြန်မာ font စာရင်း
+  subtitle_fonts.py        စက်ထဲက မြန်မာ font + English (Latin) font စာရင်း
   recap_subtitles.py       Narration Subtitle UI (font / အရောင် / box …)
   gemini_tts.py            Gemini TTS narrator (တစ်ကားလုံး narrator တစ်ယောက်တည်း)
   launch.ps1               Python ရှာပြီး UI ဖွင့်တာ
@@ -254,9 +274,10 @@ Internet မလိုပါဘူး။ Gemini ကို အတုနဲ့ အ�
 
 ## English
 
-**Recap → Myanmar** turns a recap/story video narrated in any language Whisper knows (English, Chinese,
-Hindi, Korean, Japanese, Thai, …) into a Myanmar-narrated one on Windows. The **Splitter** tab cuts long
-videos into parts.
+**Recap → Myanmar / English** turns a recap/story video narrated in any language Whisper knows (English, Chinese,
+Hindi, Korean, Japanese, Thai, …) into a Myanmar-narrated one on Windows, or — for an English video — into a
+freshly worded English narration with an Edge English voice (default `en-GB-RyanNeural`). The **Splitter** tab cuts
+long videos into parts.
 
 ### How it works
 1. **Listen** — local Whisper (faster-whisper; NVIDIA GPU or CPU) writes the speech with word timestamps.
@@ -269,12 +290,16 @@ videos into parts.
    more units = more sync anchors.
 3. **Story memory** — Gemini reads the whole transcript first and keeps names, relationships and
    places consistent.
-4. **Translate** — Gemini translates 40 units per request into natural spoken Burmese narration
-   (no summary, no shortening, every unit keeps its own content), then an audit pass repairs
-   omissions/shifts/duplicates. Letters of another script inside the Burmese (e.g. Georgian "მის"
-   inside "ဧည့်ခန်း") are asked again, and if still there removed and logged.
-5. **Voice** — Microsoft Edge TTS Myanmar voices (Thiha / Nilar). "Short pauses" trims the silence
-   Edge puts around each clip (~0.25 s between lines instead of ~1 s).
+4. **Translate or rewrite** — with **Output = Myanmar · translate**, Gemini translates 40 units per request into
+   natural spoken Burmese narration (no summary, no shortening, every unit keeps its own content), then an audit
+   pass repairs omissions/shifts/duplicates. Letters of another script inside the Burmese (e.g. Georgian "მის"
+   inside "ဧည့်ခန်း") are asked again, and if still there removed and logged. With **Output = English · rewrite**
+   an English video keeps its meaning and facts but gets fresh wording and sentence structure (also audited;
+   copied lines are asked again).
+5. **Voice** — Myanmar: Microsoft Edge TTS voices (Thiha / Nilar). English: `en-GB-RyanNeural` and 36 more
+   Edge English voices (en-GB / en-US / en-AU / en-CA / en-IE / en-IN / en-NZ / en-ZA / en-HK / en-KE / en-NG /
+   en-PH / en-SG / en-TZ). "Short pauses" trims the silence Edge puts around each clip (~0.25 s between lines
+   instead of ~1 s).
 6. **Smart Sync** — every unit owns a window of the original picture (the silence between two units
    is split at its middle, so the whole video is used). Each window is slowed down or sped up to the
    length of its Myanmar voice; it never plays faster than 1.25× (`max_video_speed`), and when the
@@ -283,9 +308,12 @@ videos into parts.
    Output ratio **16:9** (1920×1080), **9:16** (1080×1920), **1:1** (1080×1080) or **Original**
    (the source shape, long side at most 1920); when the source has another shape, **Fill** decides:
    Blur background, Black bars or Crop to fill. Optional zoom/flip; NVENC or libx264.
-7. **Production tools** — blur boxes, title, logo and an extra text box placed on the preview.
+7. **Production tools** — blur boxes, title, logo, an extra text box and up to five Custom Image Overlays placed on
+   the preview. Every image has its own **Start**/**End** window: type `MM:SS`, `H:MM:SS` or plain seconds, or click
+   **Use preview** to fill the current time. A blank **End** means the image stays for the whole video. Timing is
+   shown in the preview and applied to the final render.
 
-The output has only the Myanmar voice (no original audio or music).
+The output has only the chosen narrator voice (Myanmar or English) — no original audio or music.
 
 ### Requirements
 Windows 10/11 64-bit · Python 3.12 64-bit (with tcl/tk, on PATH) · FFmpeg (`ffmpeg.exe` +
@@ -317,8 +345,9 @@ requests" line is only a warning. If huggingface.co does not open, use a VPN or 
 Double-click **`RUN.bat`**:
 - **Source Video** → Browse (or **Folder** for a batch; finished videos are skipped).
 - **Save final to** — when a folder is chosen, each finished video is also saved there as
-  `<video name>_Myanmar.mp4`.
-- **Source language** (Auto-detect, English, Chinese, Hindi, …), **Edge TTS Voice / Speed** on the left.
+  `<video name>_Myanmar.mp4` (translate) or `<video name>_English.mp4` (rewrite).
+- **Source language** (Auto-detect, English, Chinese, Hindi, …), **Output** (**Myanmar · translate** or
+  **English · rewrite**), **Narrator Voice / Speed** on the left. The voice list follows Output.
 - **Preview** in the middle: seek, Refresh Frame, drag the title/logo/text, draw blur boxes.
 - **Production Tools** on the right: Zoom, Flip, Voice vol, Short pauses, Ratio + Fill, blur,
   title, logo, extra text.
@@ -361,11 +390,28 @@ style** adds a delivery preference (e.g. calm storyteller) without changing the 
 used up is skipped; when all are, the run stops and finished lines are kept for START/RESUME. Needs a VPN in
 Myanmar.
 
+### English rewrite mode (English → English)
+Choose **Output = English · rewrite** when the video already speaks English and you want new wording rather
+than a translation.
+- **Meaning stays identical** — events, names, numbers, relationships and dialogue are kept; only word choice
+  and sentence structure change. No summarising, no added facts, nothing moved to another line.
+- **English source only** — set Source language to English (or Auto-detect). Starting another language in
+  English mode stops with "English mode rewrites an English video"; switch Output to Myanmar to translate.
+- **Voices** — `en-GB-RyanNeural` is the default (English UK); 36 more Edge English voices are listed
+  (en-GB / en-US / en-AU / en-CA / en-IE / en-IN / en-NZ / en-ZA / en-HK / en-KE / en-NG / en-PH / en-SG /
+  en-TZ, male and female). An en-GB voice also asks the rewriter for British spelling and idiom.
+- **Subtitles and overlays** — English narration uses Latin subtitle fonts (Segoe UI and other installed Latin
+  families, or your own choice) and keeps its brackets; title and extra text are drawn with a Latin font too.
+- **Output file** — `<video name>_English.mp4` in **Save final to**.
+- English mode has its own checkpoint, so switching modes rebuilds the translation/rewrite (the Whisper
+  transcript is reused).
+
 ### Narration subtitles and video quality
-**Narration Subtitle** (bottom of Production Tools): the spoken Burmese is burned in as subtitles — installed
-Myanmar font, size, bold, text / outline colour, outline width, shadow, box colour and opacity, width; drag it on
-the preview. Long lines become two-line cards timed on the voice; English glosses in ( ) are not shown. An SRT is
-always written to `SRT_for_upload\` (not next to the video, where players would show it twice).
+**Narration Subtitle** (bottom of Production Tools): the spoken narration is burned in as subtitles — installed
+Myanmar font (or a Latin font in English mode), size, bold, text / outline colour, outline width, shadow, box
+colour and opacity, width; drag it on the preview. Long lines become two-line cards timed on the voice;
+Myanmar mode hides English glosses in ( ), English mode shows the line as written. An SRT is always written to
+`SRT_for_upload\` (not next to the video, where players would show it twice).
 
 **Quality** (under Ratio): 1080p (as before) / 720p / 480p. Measured on 4 CPU threads without an NVIDIA card,
 20 s of video: 1080p 52 s, 720p 9 s, 480p 3.6 s. Title, logo, text and subtitle sizes are scaled so the look is
@@ -375,7 +421,8 @@ the same; changing it re-renders only the video parts (translation and voice are
 `ffmpeg_path`, `ffprobe_path`, `python_path`, `max_video_speed` (1.25),
 `translation_batch_max_items` (40), `atomic_target_duration` / `atomic_max_duration` (4.2 / 5.6),
 `translation_audit` (true), `title_font_path`, `overlay_blur_strength` (18),
-`whisper_model_other` ("medium"; the Whisper model for languages other than English).
+`whisper_model_other` ("medium"; the Whisper model for languages other than English),
+`target_language` ("mm" translate / "en" English rewrite).
 
 ### Tests
 `py -3.12 -m unittest discover -s tests` (offline; Gemini is mocked).

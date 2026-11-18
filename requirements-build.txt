@@ -1,0 +1,5 @@
+# Build tools for the Windows desktop app (RecapUpgrade.exe).
+#   py -3.12 -m pip install -r requirements-build.txt
+#   build_exe.bat
+-r requirements.txt
+pyinstaller>=6.22

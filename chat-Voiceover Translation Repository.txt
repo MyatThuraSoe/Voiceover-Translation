@@ -1,0 +1,1317 @@
+
+# Project Requirements Document
+## Voiceover-Translation Application — Feature Upgrade & Enhancement
+
+**Version:** 2.0
+**Date:** November 2026
+**Repository:** https://github.com/MyatThuraSoe/Voiceover-Translation
+**Target Platform:** Windows 10/11 64-bit, Python 3.12
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Existing Architecture Reference](#2-existing-architecture-reference)
+3. [Feature 1: Templates & Presets System](#3-feature-1-templates--presets-system)
+4. [Feature 2: Custom Image Overlay](#4-feature-2-custom-image-overlay)
+5. [Feature 3: Video Cropping](#5-feature-3-video-cropping)
+6. [Feature 4: Color Correction & Video Filters](#6-feature-4-color-correction--video-filters)
+7. [Feature 5: Better Myanmar TTS Options](#7-feature-5-better-myanmar-tts-options)
+8. [Feature 6: Audio Auto-Ducking](#8-feature-6-audio-auto-ducking)
+9. [Feature 7: UX & Quality-of-Life Improvements](#9-feature-7-ux--quality-of-life-improvements)
+10. [Feature 8: Enhanced Batch Queue Manager](#10-feature-8-enhanced-batch-queue-manager)
+11. [FFmpeg Filter Chain Architecture](#11-ffmpeg-filter-chain-architecture)
+12. [Data Schema Reference](#12-data-schema-reference)
+13. [Implementation Priority & Phases](#13-implementation-priority--phases)
+14. [Testing Requirements](#14-testing-requirements)
+
+---
+
+## 1. Project Overview
+
+### 1.1 Purpose
+Upgrade the existing "Voiceover-Translation" (Recap → Myanmar) Windows desktop application with new features that improve usability, video editing capabilities, voice quality, and workflow efficiency. The application translates narrated recap videos from any language into Myanmar (Burmese) with synchronized voiceover.
+
+### 1.2 Goals
+- Reduce repetitive user actions through templates and presets
+- Add professional video editing capabilities (crop, overlays, color correction)
+- Improve Myanmar voice quality without requiring paid API access
+- Simplify the user interface for non-technical users
+- Maintain backward compatibility with existing job folders and checkpoints
+
+### 1.3 Constraints
+- Must run on Windows 10/11 with Python 3.12
+- Must use FFmpeg for all video processing
+- GUI must remain Tkinter-based (no framework migration)
+- All new features must be checkpoint-resumable
+- Must not break existing Smart Sync timing logic
+- Free/local solutions preferred over paid APIs
+
+---
+
+## 2. Existing Architecture Reference
+
+### 2.1 File Structure
+```
+Voiceover-Translation/
+├── app/
+│   ├── controller.py          # Main GUI (Tkinter), orchestrates everything
+│   ├── core.py                # EdgeSmartSync engine, EdgeTTSEngine, render logic
+│   ├── gemini_tts.py          # Gemini TTS adapter
+│   ├── render_worker.py       # Subprocess worker for rendering (reads JSON config)
+│   ├── planner_worker.py      # Subprocess worker for transcription/translation
+│   ├── recap_planner.py       # Whisper + Gemini translation pipeline
+│   ├── splitter.py            # Video splitting logic
+│   ├── splitter_tab.py        # Splitter GUI tab
+│   ├── narration_editor.py    # Text editing UI
+│   ├── preview_tools.py       # Preview frame extraction
+│   ├── subtitle_fonts.py      # Font management
+│   ├── subtitle_png.py        # Subtitle rendering
+│   └── check_python.py        # Environment validator
+├── recap_runtime/
+│   └── services/
+│       ├── ai_service.py      # Gemini API wrapper
+│       └── whisper_service.py # Whisper STT wrapper
+├── services/
+│   └── text_overlay_service.py # FFmpeg overlay composition
+├── tests/
+│   └── (various test files)
+├── requirements.txt
+├── INSTALL_REQUIREMENTS.bat
+├── RUN.bat
+├── .env.example
+└── README.md
+```
+
+### 2.2 Communication Protocol
+- **GUI → Workers:** JSON config files written to job directory (`_planner_worker.json`, `_render_worker.json`)
+- **Workers → GUI:** Structured stdout events with prefix `@@VRS_EVENT@@`
+- **Event Types:** `log`, `progress`, `result`, `error`, `stopped`
+- **Stop Mechanism:** `.stop_requested` file in job directory
+
+### 2.3 Key Classes
+- `App` (controller.py) — Main Tkinter window, settings management, worker spawning
+- `EdgeSmartSync` (core.py) — Video rendering engine, timing synchronization
+- `EdgeTTSEngine` (core.py) — Microsoft Edge TTS adapter with retry logic
+- `GeminiTTSEngine` (gemini_tts.py) — Gemini TTS adapter
+- `RecapPlanBuilder` (recap_planner.py) — Whisper + Gemini translation pipeline
+- `WhisperTimestampService` (whisper_service.py) — Local STT
+- `AIService` (ai_service.py) — Gemini API client wrapper
+
+### 2.4 Existing Settings Variables (in controller.py)
+```python
+# Video settings
+output_ratio: str          # "16:9", "9:16", "1:1", "4:3"
+frame_fill: str            # "blur", "solid", "black"
+video_quality: str         # "1080", "720", "480"
+zoom_factor: float         # 1.00 to 1.25
+mirror_video: bool         # horizontal flip
+voice_volume_percent: int  # 50 to 300
+short_pauses: bool         # add 0.25s pauses between lines
+
+# Audio settings
+edge_voice: str            # voice identifier
+edge_rate_percent: int     # -50 to +100
+gemini_direction: str      # style prompt for Gemini TTS
+
+# Overlay settings
+title_text: str
+title_size: int
+logo_enabled: bool
+logo_path: str
+logo_width_frac: float     # 0.06 to 0.35
+logo_opacity: float        # 0.10 to 1.00
+extra_text: str
+extra_text_size: int
+extra_text_opacity: float
+
+# Subtitle settings (SubtitleControls widget)
+subtitles: dict
+```
+
+---
+
+## 3. Feature 1: Templates & Presets System
+
+### 3.1 Description
+Allow users to save, load, and manage named configuration presets. A preset captures all current UI settings so the user can apply a complete configuration with one click.
+
+### 3.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| T-01 | User can save current settings as a named preset |
+| T-02 | User can load a saved preset to restore all settings |
+| T-03 | User can delete a saved preset |
+| T-04 | User can set a default preset that auto-loads on app start |
+| T-05 | Presets persist between app sessions (saved to disk) |
+| T-06 | Preset names must be unique (overwrite prompt if duplicate) |
+| T-07 | App ships with 3 built-in factory presets (not deletable) |
+
+### 3.3 Built-in Factory Presets
+
+| Preset Name | Settings |
+|-------------|----------|
+| "YouTube Long Form" | ratio=16:9, quality=1080, fill=blur, zoom=1.0, mirror=false, subtitles=bottom |
+| "TikTok / Reels Viral" | ratio=9:16, quality=1080, fill=blur, zoom=1.3, mirror=true, subtitles=center, title=top |
+| "Facebook Square" | ratio=1:1, quality=720, fill=blur, zoom=1.1, mirror=false |
+
+### 3.4 Data Schema
+
+**File:** `presets.json` (stored in app root directory)
+
+```json
+{
+  "version": 1,
+  "default_preset": "YouTube Long Form",
+  "presets": {
+    "YouTube Long Form": {
+      "created_at": "2026-11-04T10:00:00",
+      "is_factory": true,
+      "settings": {
+        "output_ratio": "16:9",
+        "frame_fill": "blur",
+        "video_quality": "1080",
+        "zoom_factor": 1.0,
+        "mirror_video": false,
+        "voice_volume_percent": 100,
+        "short_pauses": true,
+        "edge_voice": "my-MM-ThihaNeural",
+        "edge_rate_percent": 0,
+        "max_video_speed": 1.5,
+        "max_video_slow": 1.35,
+        "smooth_freeze_fallback": false,
+        "max_freeze_hold": 0.75,
+        "title_text": "",
+        "title_size": 48,
+        "logo_enabled": false,
+        "logo_path": "",
+        "logo_width_frac": 0.12,
+        "logo_opacity": 0.8,
+        "extra_text": "",
+        "extra_text_size": 32,
+        "extra_text_opacity": 1.0,
+        "subtitles": {},
+        "crop": { "enabled": false },
+        "custom_overlays": [],
+        "color_correction": {
+          "brightness": 0.0,
+          "contrast": 1.0,
+          "saturation": 1.0
+        },
+        "audio_ducking": {
+          "enabled": false,
+          "duck_volume_percent": 30
+        }
+      }
+    }
+  }
+}
+```
+
+### 3.5 UI Specification
+
+**Location:** Top of the settings panel in `controller.py`, above all other controls.
+
+```
+┌─ Preset ──────────────────────────────────────────┐
+│ Load: [ YouTube Long Form          ▼ ]            │
+│                                                    │
+│ [ 💾 Save As... ]  [ 🗑️ Delete ]  [ ⭐ Set Default ] │
+└────────────────────────────────────────────────────┘
+```
+
+**Widgets:**
+- `ttk.Combobox` — dropdown listing all preset names
+- `ttk.Button("Save As...")` — opens `tkinter.simpledialog.askstring` for name input
+- `ttk.Button("Delete")` — confirms with `messagebox.askyesno`, disabled for factory presets
+- `ttk.Button("Set Default")` — marks preset as auto-load on startup
+
+### 3.6 Implementation Details
+
+**New file:** `app/preset_manager.py`
+
+```python
+class PresetManager:
+    def __init__(self, app_root: Path):
+        self.file_path = app_root / "presets.json"
+        self.presets: dict = {}
+        self.default_preset: str = ""
+        self._load()
+
+    def _load(self) -> None: ...
+    def _save(self) -> None: ...
+    def get_preset_names(self) -> list[str]: ...
+    def get_settings(self, name: str) -> dict: ...
+    def save_preset(self, name: str, settings: dict) -> None: ...
+    def delete_preset(self, name: str) -> bool: ...
+    def set_default(self, name: str) -> None: ...
+    def get_default_name(self) -> str: ...
+    def apply_to_controller(self, controller) -> None: ...
+    def capture_from_controller(self, controller) -> dict: ...
+```
+
+**Integration in `controller.py`:**
+- On `App.__init__`: instantiate `PresetManager`, load default preset
+- On preset selection: call `apply_to_controller()` to set all Tk variables
+- On "Save As": call `capture_from_controller()` to read all Tk variables
+- Factory presets are stored in a separate `factory_presets.json` and merged at load time
+
+### 3.7 Edge Cases
+- If a preset references a logo file that no longer exists, show a warning but continue
+- If `presets.json` is corrupted, fall back to factory presets and log a warning
+- Preset names are case-insensitive for duplicate detection
+- Maximum preset name length: 50 characters
+
+---
+
+## 4. Feature 2: Custom Image Overlay
+
+### 4.1 Description
+Allow users to add one or more PNG/JPG images as overlays on the video. Each image can be positioned anywhere on screen via drag-and-drop on the preview canvas, resized, and given opacity.
+
+### 4.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| IO-01 | User can add up to 5 custom image overlays |
+| IO-02 | Each overlay supports PNG (with transparency) and JPG |
+| IO-03 | User can position overlay by dragging on preview canvas |
+| IO-04 | User can resize overlay via slider (percentage of video width) |
+| IO-05 | User can set overlay opacity (10% to 100%) |
+| IO-06 | User can remove an overlay |
+| IO-07 | Overlay positions are stored as percentages (resolution-independent) |
+| IO-08 | Overlays are rendered AFTER crop but BEFORE subtitles |
+| IO-09 | Overlays persist in presets and job configs |
+
+### 4.3 Data Schema
+
+Stored in settings under `"custom_overlays"`:
+
+```json
+"custom_overlays": [
+  {
+    "id": 1,
+    "path": "C:/Users/user/images/watermark.png",
+    "x_percent": 0.85,
+    "y_percent": 0.05,
+    "width_percent": 0.12,
+    "opacity": 0.9,
+    "enabled": true
+  },
+  {
+    "id": 2,
+    "path": "C:/Users/user/images/qrcode.png",
+    "x_percent": 0.05,
+    "y_percent": 0.80,
+    "width_percent": 0.15,
+    "opacity": 1.0,
+    "enabled": true
+  }
+]
+```
+
+**Coordinate system:**
+- `x_percent`: 0.0 = left edge, 1.0 = right edge (position of image's LEFT edge)
+- `y_percent`: 0.0 = top edge, 1.0 = bottom edge (position of image's TOP edge)
+- `width_percent`: fraction of video width (height auto-calculated from aspect ratio)
+
+### 4.4 UI Specification
+
+**Location:** New section in Production Tools panel, after "Logo" section.
+
+```
+┌─ Custom Image Overlays ─────────────────────────┐
+│ [ + Add Image ]                                   │
+│                                                   │
+│ ┌─ Image 1: watermark.png ────────────────────┐  │
+│ │ [✓] Enabled    [Browse...] [Remove]         │  │
+│ │ Size:    [========|====] 12%                │  │
+│ │ Opacity: [=======|=====] 90%                │  │
+│ │ Position: drag on preview                   │  │
+│ └─────────────────────────────────────────────┘  │
+│                                                   │
+│ ┌─ Image 2: qrcode.png ───────────────────────┐  │
+│ │ ...                                         │  │
+│ └─────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────┘
+```
+
+**Preview Canvas Behavior:**
+- Each overlay appears as a thumbnail on the preview canvas
+- Click to select (shows border highlight)
+- Drag to reposition
+- Selected overlay's sliders become active
+- Double-click to open file browser for replacement
+
+### 4.5 FFmpeg Implementation
+
+**In `text_overlay_service.py` or `core.py`:**
+
+For each overlay, add an input and filter:
+
+```python
+def build_overlay_filters(base_video: str, overlays: list[dict], video_w: int, video_h: int) -> tuple[str, list[str]]:
+    """
+    Returns (filter_complex_string, list_of_input_files)
+    """
+    inputs = []
+    filter_parts = []
+    current_stream = base_video  # e.g., "[0:v]" or "[cropped]"
+
+    for i, ov in enumerate(overlays):
+        if not ov.get("enabled", True):
+            continue
+        input_index = len(inputs) + 1  # +1 because input 0 is the video
+        inputs.append(ov["path"])
+
+        # Calculate pixel positions
+        x_px = int(ov["x_percent"] * video_w)
+        y_px = int(ov["y_percent"] * video_h)
+        w_px = int(ov["width_percent"] * video_w)
+
+        # Scale the overlay image
+        filter_parts.append(
+            f"[{input_index}:v]scale={w_px}:-1,format=rgba,"
+            f"colorchannelmixer=aa={ov['opacity']:.2f}[ov{i}]"
+        )
+
+        # Overlay onto current stream
+        out_label = f"[ovout{i}]"
+        filter_parts.append(
+            f"{current_stream}[ov{i}]overlay=x={x_px}:y={y_px}{out_label}"
+        )
+        current_stream = out_label
+
+    return current_stream, inputs
+```
+
+### 4.6 Edge Cases
+- Image file missing at render time → skip overlay, log warning
+- Image extends beyond video boundary → clamp position to keep image visible
+- Very large image → auto-scale down to `width_percent` before overlay
+- Non-PNG without transparency → works fine, just no transparent areas
+- Corrupted image file → skip with error log, do not crash render
+
+---
+
+## 5. Feature 3: Video Cropping
+
+### 5.1 Description
+Allow users to crop the source video to remove black bars, watermarks, or unwanted areas. Supports both automatic detection and manual visual selection.
+
+### 5.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| CR-01 | User can enable/disable cropping |
+| CR-02 | Auto-detect button finds black bars and sets crop values |
+| CR-03 | Manual mode shows draggable crop box on preview |
+| CR-04 | Crop box supports aspect ratio locking (free, 16:9, 9:16, 1:1, 4:3) |
+| CR-05 | Crop is applied as the FIRST filter in the FFmpeg chain |
+| CR-06 | Crop values stored as percentages for resolution independence |
+| CR-07 | Reset button restores full frame (no crop) |
+| CR-08 | Crop interacts correctly with output_ratio and frame_fill |
+
+### 5.3 Data Schema
+
+```json
+"crop": {
+  "enabled": true,
+  "mode": "manual",
+  "x_percent": 0.0,
+  "y_percent": 0.15,
+  "width_percent": 1.0,
+  "height_percent": 0.70,
+  "aspect_lock": "free"
+}
+```
+
+### 5.4 Auto-Crop Implementation
+
+**New file:** `app/crop_detect.py`
+
+```python
+import subprocess
+import re
+from pathlib import Path
+
+def detect_black_bars(
+    ffprobe_path: str,
+    ffmpeg_path: str,
+    video_path: str,
+    duration_sample: float = 10.0,
+    threshold: int = 24
+) -> dict | None:
+    """
+    Run FFmpeg cropdetect on the video and parse the result.
+
+    Returns:
+        {
+            "x_percent": float,
+            "y_percent": float,
+            "width_percent": float,
+            "height_percent": float
+        }
+        or None if detection fails
+    """
+    # Get video dimensions first
+    probe_cmd = [
+        ffprobe_path, "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0",
+        str(video_path)
+    ]
+    result = subprocess.run(probe_cmd, capture_output=True, text=True)
+    video_w, video_h = map(int, result.stdout.strip().split(","))
+
+    # Run cropdetect
+    detect_cmd = [
+        ffmpeg_path, "-i", str(video_path),
+        "-vf", f"cropdetect={threshold}:16:0",
+        "-t", str(duration_sample),
+        "-f", "null", "-"
+    ]
+    result = subprocess.run(detect_cmd, capture_output=True, text=True)
+
+    # Parse output: look for "crop=W:H:X:Y"
+    # Take the LAST occurrence (most stable reading)
+    matches = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", result.stderr)
+    if not matches:
+        return None
+
+    # Use median of all detected values for stability
+    import statistics
+    crops = [(int(w), int(h), int(x), int(y)) for w, h, x, y in matches]
+    med_w = int(statistics.median([c[0] for c in crops]))
+    med_h = int(statistics.median([c[1] for c in crops]))
+    med_x = int(statistics.median([c[2] for c in crops]))
+    med_y = int(statistics.median([c[3] for c in crops]))
+
+    # Convert to percentages
+    return {
+        "x_percent": med_x / video_w,
+        "y_percent": med_y / video_h,
+        "width_percent": med_w / video_w,
+        "height_percent": med_h / video_h
+    }
+```
+
+### 5.5 Manual Crop UI
+
+**Preview Canvas Behavior:**
+- When crop is enabled, draw a semi-transparent dark overlay on areas OUTSIDE the crop box
+- The crop box has 8 handles: 4 corners + 4 edge midpoints
+- Drag corners to resize freely (or with aspect lock)
+- Drag edges to resize one dimension
+- Drag center to move the entire box
+- Display pixel dimensions and percentage values below the canvas
+
+**Aspect Ratio Lock:**
+```python
+ASPECT_LOCKS = {
+    "free": None,
+    "16:9": 16/9,
+    "9:16": 9/16,
+    "1:1": 1.0,
+    "4:3": 4/3,
+    "3:4": 3/4
+}
+```
+When locked, dragging a corner adjusts both dimensions to maintain the ratio.
+
+### 5.6 FFmpeg Crop Filter Generation
+
+```python
+def build_crop_filter(crop: dict, video_w: int, video_h: int) -> str | None:
+    """Returns FFmpeg crop filter string or None if crop is disabled."""
+    if not crop.get("enabled", False):
+        return None
+
+    x_px = int(crop["x_percent"] * video_w)
+    y_px = int(crop["y_percent"] * video_h)
+    w_px = int(crop["width_percent"] * video_w)
+    h_px = int(crop["height_percent"] * video_h)
+
+    # Ensure even dimensions (required by many codecs)
+    w_px = w_px - (w_px % 2)
+    h_px = h_px - (h_px % 2)
+    x_px = x_px - (x_px % 2)
+    y_px = y_px - (y_py % 2)
+
+    if w_px >= video_w and h_px >= video_h:
+        return None  # No actual cropping needed
+
+    return f"crop={w_px}:{h_px}:{x_px}:{y_px}"
+```
+
+### 5.7 Edge Cases
+- Crop results in zero-width or zero-height → disable crop, show error
+- Crop dimensions not even → round down to nearest even number (codec requirement)
+- Auto-detect finds no black bars (crop = full frame) → show "No black bars detected" message
+- Crop + output_ratio conflict → crop is applied first, then output_ratio handles remaining aspect difference
+
+---
+
+## 6. Feature 4: Color Correction & Video Filters
+
+### 6.1 Description
+Provide sliders for adjusting brightness, contrast, saturation, and optional color temperature. These adjustments help improve the visual quality of source videos that may be too dark, washed out, or have unwanted color casts.
+
+### 6.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| CC-01 | Brightness slider: -0.5 to +0.5 (default 0.0) |
+| CC-02 | Contrast slider: 0.5 to 2.0 (default 1.0) |
+| CC-03 | Saturation slider: 0.0 to 3.0 (default 1.0) |
+| CC-04 | "Reset" button restores all to defaults |
+| CC-05 | Preview updates when sliders change (with debounce) |
+| CC-06 | Applied AFTER crop, BEFORE overlays in filter chain |
+
+### 6.3 Data Schema
+
+```json
+"color_correction": {
+  "enabled": true,
+  "brightness": 0.06,
+  "contrast": 1.1,
+  "saturation": 1.3
+}
+```
+
+### 6.4 FFmpeg Implementation
+
+Uses the `eq` (equalize) filter:
+
+```python
+def build_color_filter(cc: dict) -> str | None:
+    if not cc.get("enabled", False):
+        return None
+    b = cc.get("brightness", 0.0)
+    c = cc.get("contrast", 1.0)
+    s = cc.get("saturation", 1.0)
+
+    # Skip if all defaults
+    if b == 0.0 and c == 1.0 and s == 1.0:
+        return None
+
+    return f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}"
+```
+
+### 6.5 UI Specification
+
+```
+┌─ Color Correction ──────────────────────────────┐
+│ [✓] Enable                                      │
+│                                                  │
+│ Brightness: [=====|=======] +0.06               │
+│ Contrast:   [======|======]  1.10               │
+│ Saturation: [========|====]  1.30               │
+│                                                  │
+│ [ Reset to Default ]                             │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## 7. Feature 5: Better Myanmar TTS Options
+
+### 7.1 Description
+Add alternative TTS engines beyond Edge TTS and Gemini to provide higher-quality Myanmar voices without paid API costs. Support multiple engines with a unified interface.
+
+### 7.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| TTS-01 | Support Edge TTS (existing, free) |
+| TTS-02 | Support Meta MMS-TTS for Myanmar (local, free) |
+| TTS-03 | Support Piper TTS if Burmese model available (local, free) |
+| TTS-04 | Support ElevenLabs API (free tier, 10k chars/month) |
+| TTS-05 | Unified engine selection dropdown in GUI |
+| TTS-06 | Voice preview button plays 3-second sample before rendering |
+| TTS-07 | Engine fallback: if selected engine fails, auto-try next |
+| TTS-08 | SSML support for Edge TTS (pauses, pitch adjustment) |
+
+### 7.3 Engine Architecture
+
+**New file:** `app/tts_engine.py`
+
+```python
+from abc import ABC, abstractmethod
+from pathlib import Path
+
+class TTSEngineBase(ABC):
+    """Base class for all TTS engines."""
+
+    @abstractmethod
+    def generate(self, text: str, voice: str, output_path: Path, **kwargs) -> Path:
+        """Generate audio file, return path to WAV/MP3."""
+        ...
+
+    @abstractmethod
+    def get_voices(self) -> list[dict]:
+        """Return list of available voices."""
+        ...
+
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Check if engine is ready to use."""
+        ...
+
+    def preview(self, text: str, voice: str) -> Path:
+        """Generate a short preview clip."""
+        ...
+
+
+class EdgeTTSEngineAdapter(TTSEngineBase):
+    """Wraps existing EdgeTTSEngine from core.py"""
+    ...
+
+class MMSMyanmarEngine(TTSEngineBase):
+    """Meta MMS TTS for Myanmar (facebook/mms-tts-mya)"""
+    def __init__(self, model_path: str = "facebook/mms-tts-mya"):
+        self.model = None
+        self.tokenizer = None
+
+    def is_available(self) -> bool:
+        try:
+            import transformers
+            return True
+        except ImportError:
+            return False
+
+    def generate(self, text: str, voice: str, output_path: Path, **kwargs) -> Path:
+        import torch
+        import scipy.io.wavfile
+        inputs = self.tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            output = self.model(**inputs).waveform
+        scipy.io.wavfile.write(
+            str(output_path),
+            rate=self.model.config.sampling_rate,
+            data=output.numpy().squeeze()
+        )
+        return output_path
+
+
+class PiperTTSEngine(TTSEngineBase):
+    """Piper TTS - fast local inference."""
+    ...
+
+class ElevenLabsEngine(TTSEngineBase):
+    """ElevenLabs API with free tier support."""
+    ...
+```
+
+### 7.4 Voice Selection UI
+
+```
+┌─ Narrator Voice ────────────────────────────────┐
+│ Engine: [ Edge TTS (Free)        ▼ ]            │
+│ Voice:  [ Myanmar - Thiha (Male) ▼ ]            │
+│                                                  │
+│ [ ▶ Preview Voice ]                             │
+│                                                  │
+│ Speed:  [=======|=====] +0%                     │
+│ Pitch:  [=======|=====] +0Hz                    │
+│                                                  │
+│ ─── Engine Status ───                           │
+│ ✅ Edge TTS: Ready                              │
+│ ✅ MMS Myanmar: Model loaded (GPU)              │
+│ ⚠️ ElevenLabs: 8,240 chars remaining this month │
+└──────────────────────────────────────────────────┘
+```
+
+### 7.5 SSML Enhancement for Edge TTS
+
+Modify `EdgeTTSEngine.generate_channel99_voice()` in `core.py`:
+
+```python
+def _wrap_ssml(self, text: str, rate: str, pitch: str, pauses: bool = True) -> str:
+    """Wrap text in SSML for more natural speech."""
+    # Add pauses at sentence boundaries
+    if pauses:
+        text = text.replace("။", '။ <break time="400ms"/>')
+        text = text.replace("၊", '၊ <break time="200ms"/>')
+        text = text.replace("!", '! <break time="500ms"/>')
+        text = text.replace("?", '? <break time="500ms"/>')
+
+    return (
+        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="my-MM">'
+        f'<prosody rate="{rate}" pitch="{pitch}">'
+        f'{text}'
+        f'</prosody>'
+        f'</speak>'
+    )
+```
+
+### 7.6 MMS Model Download
+
+First-time setup should download the model (~350MB):
+
+```python
+def download_mms_model(target_dir: Path, log_fn=None) -> bool:
+    """Download facebook/mms-tts-mya model to local cache."""
+    try:
+        from transformers import VitsModel, AutoTokenizer
+        log_fn("Downloading MMS Myanmar TTS model (~350MB)...")
+        model = VitsModel.from_pretrained("facebook/mms-tts-mya")
+        tokenizer = AutoTokenizer.from_pretrained("facebook/mms-tts-mya")
+        model.save_pretrained(str(target_dir / "mms-mya"))
+        tokenizer.save_pretrained(str(target_dir / "mms-mya"))
+        log_fn("✅ MMS Myanmar model ready")
+        return True
+    except Exception as e:
+        log_fn(f"❌ MMS download failed: {e}")
+        return False
+```
+
+### 7.7 Fallback Chain
+
+```python
+TTS_FALLBACK_ORDER = [
+    "mms_myanmar",      # Best quality, local
+    "edge_tts",         # Reliable, free
+    "gemini_tts",       # If user has API key
+    "elevenlabs",       # If user has free tier
+]
+```
+
+If the selected engine fails 3 times, automatically try the next engine in the chain and log: `"⚠️ MMS failed, falling back to Edge TTS"`
+
+---
+
+## 8. Feature 6: Audio Auto-Ducking
+
+### 8.1 Description
+Automatically reduce the volume of the original video's background music/sound effects when the Myanmar narrator is speaking, then restore volume during pauses. This creates a professional "radio DJ" effect.
+
+### 8.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| AD-01 | Toggle to enable/disable auto-ducking |
+| AD-02 | Slider to set duck volume (how quiet BGM gets: 10% to 80%) |
+| AD-03 | Ducking is based on TTS segment timestamps (from smart_sync_plan.json) |
+| AD-04 | Smooth fade-in/fade-out (200ms ramp) to avoid abrupt volume jumps |
+| AD-05 | Works with both Edge TTS and Gemini TTS timing data |
+
+### 8.3 Implementation Approach
+
+Since we already have exact timestamps for each narration segment from `smart_sync_plan.json`, we can use FFmpeg's `volume` filter with timeline expressions.
+
+**Generate volume expression from segments:**
+
+```python
+def build_ducking_filter(segments: list[dict], duck_volume: float, fade_ms: int = 200) -> str:
+    """
+    Build FFmpeg volume filter expression that ducks original audio
+    during narration segments.
+
+    segments: list of {"audio_start": float, "audio_end": float, ...}
+    duck_volume: 0.0 to 1.0 (e.g., 0.3 = 30% volume during narration)
+    """
+    fade_s = fade_ms / 1000.0
+    conditions = []
+
+    for seg in segments:
+        start = seg["audio_start"]
+        end = seg["audio_end"]
+        # Between start and end: duck volume
+        # With fade ramps at boundaries
+        conditions.append(
+            f"between(t,{start},{end})"
+        )
+
+    if not conditions:
+        return None
+
+    # Build expression: if any segment is active, use duck volume, else 1.0
+    # FFmpeg volume filter with 'eval=frame' for dynamic changes
+    expr = f"if({'|'.join(conditions)},{duck_volume:.2f},1.0)"
+
+    return f"volume='{expr}':eval=frame"
+```
+
+### 8.4 Data Schema
+
+```json
+"audio_ducking": {
+  "enabled": true,
+  "duck_volume_percent": 30,
+  "fade_ms": 200
+}
+```
+
+### 8.5 UI
+
+```
+┌─ Audio Ducking ─────────────────────────────────┐
+│ [✓] Auto-duck background audio during narration │
+│                                                  │
+│ Duck level: [====|========] 30%                 │
+│ (How quiet the background gets during voice)    │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. Feature 7: UX & Quality-of-Life Improvements
+
+### 9.1 Drag-and-Drop File Input
+
+**Requirement:** Users can drag video files from Windows Explorer directly onto the app window.
+
+**Implementation:**
+- Add `tkinterdnd2` to `requirements.txt`
+- Change `App` class to inherit from `TkinterDnD.Tk` instead of `tk.Tk`
+- Register drop handler:
+
+```python
+from tkinterdnd2 import TkinterDnD, DND_FILES
+
+class App(TkinterDnD.Tk):
+    def __init__(self):
+        super().__init__()
+        self.drop_target_register(DND_FILES)
+        self.dnd_bind('<<Drop>>', self._on_file_drop)
+
+    def _on_file_drop(self, event):
+        files = self.tk.splitlist(event.data)
+        video_files = [f for f in files if f.lower().endswith(('.mp4', '.mkv', '.avi', '.mov'))]
+        if video_files:
+            self.source.set(video_files[0])
+            if len(video_files) > 1:
+                self.batch_files = [Path(f) for f in video_files]
+                self._log(f"📂 Added {len(video_files)} videos to batch queue")
+```
+
+### 9.2 One-Click "Viral Format" Buttons
+
+**Requirement:** Quick buttons that instantly configure common output formats.
+
+**UI:** Row of icon buttons at the top of Production Tools:
+
+```
+[📱 9:16 Shorts] [🖥️ 16:9 YouTube] [⬜ 1:1 Square] [🎬 Cinematic]
+```
+
+Each button applies a preset instantly without opening the preset dropdown.
+
+### 9.3 Voice Preview Button
+
+**Requirement:** Play a 3-second sample of the selected voice before starting a full render.
+
+**Implementation:**
+```python
+def _preview_voice(self):
+    """Generate and play a short voice sample."""
+    sample_text = "မင်္ဂလာပါ။ ဒါသည် အသံ နမူနာ ဖြစ်ပါတယ်။"
+    # Generate to temp file
+    temp_path = self.temp_dir / "voice_preview.wav"
+    engine = self._get_current_engine()
+    engine.generate(sample_text, self.edge_voice.get(), temp_path)
+    # Play using winsound or pygame
+    import winsound
+    winsound.PlaySound(str(temp_path), winsound.SND_FILENAME)
+```
+
+### 9.4 Progress Enhancement
+
+**Requirement:** Show estimated time remaining and processing speed.
+
+```python
+def _update_progress_eta(self, current: int, total: int, elapsed_seconds: float):
+    if current > 0:
+        rate = elapsed_seconds / current
+        remaining = rate * (total - current)
+        eta_str = f"~{int(remaining//60)}m {int(remaining%60)}s remaining"
+        self.status.set(f"Processing {current}/{total} | {eta_str}")
+```
+
+### 9.5 Error Recovery Suggestions
+
+**Requirement:** When an error occurs, show actionable suggestions.
+
+```python
+ERROR_SUGGESTIONS = {
+    "Edge TTS returned no usable MP3": "Check internet connection. Try again — Edge TTS sometimes has transient failures.",
+    "Gemini API key": "Check your .env file. Get a free key at aistudio.google.com/apikey",
+    "ffmpeg not found": "Run INSTALL_REQUIREMENTS.bat to download FFmpeg automatically.",
+    "CUDA out of memory": "Close other GPU applications, or set WHISPER_DEVICE=cpu in config.",
+}
+```
+
+---
+
+## 10. Feature 8: Enhanced Batch Queue Manager
+
+### 10.1 Description
+Replace the simple sequential batch processing with a visual queue manager that shows status, allows reordering, and provides per-file actions.
+
+### 10.2 Functional Requirements
+
+| ID | Requirement |
+|----|-------------|
+| BQ-01 | Display all queued videos in a table/list view |
+| BQ-02 | Show status per video: Pending, Processing, Done, Failed, Skipped |
+| BQ-03 | Show progress bar per video during processing |
+| BQ-04 | Right-click context menu: Open Folder, Retry, Remove, Preview |
+| BQ-05 | Drag to reorder queue |
+| BQ-06 | "Skip already completed" checkbox |
+| BQ-07 | Summary report at end (success/fail counts) |
+
+### 10.3 UI Specification
+
+Replace the simple log-only batch view with a `ttk.Treeview`:
+
+```
+┌─ Batch Queue ──────────────────────────────────────────────────┐
+│ # │ Filename              │ Status    │ Progress │ Duration    │
+│───│───────────────────────│───────────│──────────│─────────────│
+│ 1 │ movie_recap_01.mp4   │ ✅ Done   │ 100%     │ 12:34      │
+│ 2 │ movie_recap_02.mp4   │ 🔄 Render │ 67%      │ --:--      │
+│ 3 │ movie_recap_03.mp4   │ ⏳ Pending│ 0%       │ --:--      │
+│ 4 │ movie_recap_04.mp4   │ ❌ Failed │ 23%      │ --:--      │
+│   │                       │           │          │             │
+│ [↑ Move Up] [↓ Move Down] [🗑️ Remove] [🔄 Retry Failed]      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 10.4 Implementation
+
+**New file:** `app/batch_manager.py`
+
+```python
+class BatchItem:
+    def __init__(self, path: Path):
+        self.path = path
+        self.status: str = "pending"  # pending, processing, done, failed, skipped
+        self.progress: float = 0.0
+        self.error_message: str = ""
+        self.output_path: Path | None = None
+        self.duration: float = 0.0
+
+class BatchManager:
+    def __init__(self):
+        self.queue: list[BatchItem] = []
+        self.is_running: bool = False
+        self.skip_completed: bool = True
+
+    def add_files(self, paths: list[Path]) -> None: ...
+    def remove_item(self, index: int) -> None: ...
+    def move_up(self, index: int) -> None: ...
+    def move_down(self, index: int) -> None: ...
+    def get_next_pending(self) -> BatchItem | None: ...
+    def mark_done(self, item: BatchItem, output: Path) -> None: ...
+    def mark_failed(self, item: BatchItem, error: str) -> None: ...
+    def get_summary(self) -> dict: ...
+```
+
+---
+
+## 11. FFmpeg Filter Chain Architecture
+
+### 11.1 Complete Filter Chain Order
+
+All video filters must be applied in this exact order:
+
+```
+[Input Video]
+    │
+    ▼
+[1. CROP]           ← Remove unwanted areas, change resolution
+    │
+    ▼
+[2. COLOR]          ← Brightness, contrast, saturation (eq filter)
+    │
+    ▼
+[3. SMART SYNC]     ← Speed adjustment, freeze frames (from core.py)
+    │
+    ▼
+[4. ZOOM/MIRROR]   ← zoom_factor, hflip
+    │
+    ▼
+[5. SCALE]          ← Scale to output resolution
+    │
+    ▼
+[6. RATIO/PAD]     ← output_ratio + frame_fill (blur/pad)
+    │
+    ▼
+[7. OVERLAYS]      ← Custom images, Logo
+    │
+    ▼
+[8. TEXT]          ← Title, Extra Text
+    │
+    ▼
+[9. SUBTITLES]     ← Narration subtitles
+    │
+    ▼
+[Output Video]
+```
+
+### 11.2 Filter Chain Builder
+
+**New file:** `app/filter_chain.py`
+
+```python
+class FFmpegFilterChain:
+    """Builds the complete FFmpeg filter_complex string."""
+
+    def __init__(self, video_w: int, video_h: int):
+        self.video_w = video_w
+        self.video_h = video_h
+        self.filters: list[str] = []
+        self.inputs: list[str] = []  # additional input files (images)
+
+    def add_crop(self, crop: dict) -> None:
+        """Step 1: Crop"""
+        f = build_crop_filter(crop, self.video_w, self.video_h)
+        if f:
+            self.filters.append(f)
+            # Update dimensions after crop
+            self.video_w = int(crop["width_percent"] * self.video_w)
+            self.video_h = int(crop["height_percent"] * self.video_h)
+
+    def add_color(self, cc: dict) -> None:
+        """Step 2: Color correction"""
+        f = build_color_filter(cc)
+        if f:
+            self.filters.append(f)
+
+    def add_zoom_mirror(self, zoom: float, mirror: bool) -> None:
+        """Step 4: Zoom and mirror"""
+        if mirror:
+            self.filters.append("hflip")
+        if zoom > 1.0:
+            # Crop-zoom: scale up then crop center
+            zw = int(self.video_w * zoom)
+            zh = int(self.video_h * zoom)
+            self.filters.append(f"scale={zw}:{zh}")
+            x_off = (zw - self.video_w) // 2
+            y_off = (zh - self.video_h) // 2
+            self.filters.append(f"crop={self.video_w}:{self.video_h}:{x_off}:{y_off}")
+
+    def add_overlay(self, image_path: str, x_pct: float, y_pct: float,
+                    w_pct: float, opacity: float) -> None:
+        """Step 7: Image overlay"""
+        # This adds an input and a filter pair
+        ...
+
+    def build(self) -> tuple[str, list[str]]:
+        """
+        Returns:
+            - filter_complex string
+            - list of additional input file paths
+        """
+        ...
+```
+
+### 11.3 Audio Filter Chain
+
+```
+[Original Audio] ──→ [Volume Duck] ──→ [Mix with TTS] ──→ [Output Audio]
+                                          ↑
+[TTS Segments] ──→ [Concat] ──→ [Volume Adjust] ──┘
+```
+
+---
+
+## 12. Data Schema Reference
+
+### 12.1 Complete Job Configuration (`_render_worker.json`)
+
+```json
+{
+  "job_dir": "C:/jobs/video_name/",
+  "source_path": "C:/videos/input.mp4",
+  "plan_path": "C:/jobs/video_name/smart_sync_plan.json",
+  "voice": "my-MM-ThihaNeural",
+  "tts_engine": "edge_tts",
+  "edge_tts_rate": "+0%",
+  "edge_tts_pitch": "+0Hz",
+  "ffmpeg_path": "C:/ffmpeg/bin/ffmpeg.exe",
+  "ffprobe_path": "C:/ffmpeg/bin/ffprobe.exe",
+  "max_video_speed": 1.5,
+  "max_video_slow": 1.35,
+  "mirror_video": true,
+  "zoom_factor": 1.05,
+  "smooth_freeze_fallback": false,
+  "max_freeze_hold": 0.75,
+  "render_final_video": true,
+  "output_ratio": "16:9",
+  "frame_fill": "blur",
+  "video_quality": "1080",
+  "voice_volume_percent": 100,
+  "short_pauses": true,
+  "stop_file": "C:/jobs/video_name/.stop_requested",
+  "gemini_env_path": ".env",
+  "gemini_direction": "",
+
+  "crop": {
+    "enabled": true,
+    "mode": "auto",
+    "x_percent": 0.0,
+    "y_percent": 0.12,
+    "width_percent": 1.0,
+    "height_percent": 0.76,
+    "aspect_lock": "free"
+  },
+
+  "color_correction": {
+    "enabled": true,
+    "brightness": 0.04,
+    "contrast": 1.05,
+    "saturation": 1.2
+  },
+
+  "custom_overlays": [
+    {
+      "id": 1,
+      "path": "C:/images/logo.png",
+      "x_percent": 0.88,
+      "y_percent": 0.03,
+      "width_percent": 0.10,
+      "opacity": 0.85,
+      "enabled": true
+    }
+  ],
+
+  "audio_ducking": {
+    "enabled": true,
+    "duck_volume_percent": 30,
+    "fade_ms": 200
+  },
+
+  "overlays": {
+    "title": { "text": "", "size": 48, "x": 0.5, "y": 0.1 },
+    "logo": { "path": "", "width_frac": 0.12, "opacity": 0.8 },
+    "extra_text": { "text": "", "size": 32, "opacity": 1.0 },
+    "subtitles": {}
+  }
+}
+```
+
+---
+
+## 13. Implementation Priority & Phases
+
+### Phase 1: Foundation (Week 1-2)
+| Priority | Task | Files Modified |
+|----------|------|---------------|
+| P0 | Preset/Template system | `controller.py`, new `app/preset_manager.py` |
+| P0 | Filter chain builder | New `app/filter_chain.py` |
+| P1 | Color correction | `controller.py`, `render_worker.py`, `core.py` |
+| P1 | Video cropping (auto) | New `app/crop_detect.py`, `controller.py` |
+
+### Phase 2: Visual Features (Week 3-4)
+| Priority | Task | Files Modified |
+|----------|------|---------------|
+| P0 | Custom image overlay | `controller.py`, `text_overlay_service.py`, `core.py` |
+| P1 | Manual crop (drag UI) | `controller.py`, `preview_tools.py` |
+| P1 | Drag-and-drop file input | `controller.py` |
+| P2 | One-click format buttons | `controller.py` |
+
+### Phase 3: Audio & TTS (Week 5-6)
+| Priority | Task | Files Modified |
+|----------|------|---------------|
+| P0 | TTS engine abstraction | New `app/tts_engine.py` |
+| P0 | MMS Myanmar TTS integration | `app/tts_engine.py`, `core.py` |
+| P1 | SSML enhancement for Edge TTS | `core.py` |
+| P1 | Voice preview button | `controller.py` |
+| P2 | Audio auto-ducking | `core.py`, `render_worker.py` |
+
+### Phase 4: Polish & Batch (Week 7-8)
+| Priority | Task | Files Modified |
+|----------|------|---------------|
+| P1 | Batch queue manager | New `app/batch_manager.py`, `controller.py` |
+| P1 | Progress ETA display | `controller.py` |
+| P2 | Error recovery suggestions | `controller.py` |
+| P2 | Factory presets refinement | `presets.json` |
+
+---
+
+## 14. Testing Requirements
+
+### 14.1 Unit Tests
+
+| Test | Description |
+|------|-------------|
+| `test_preset_save_load.py` | Save settings → load → verify all values match |
+| `test_crop_detect.py` | Feed synthetic video with black bars → verify detection |
+| `test_filter_chain_order.py` | Verify filters are always in correct order |
+| `test_overlay_positions.py` | Verify percentage-to-pixel conversion at multiple resolutions |
+| `test_color_filter.py` | Verify eq filter string generation |
+| `test_ducking_expression.py` | Verify volume expression from segment timestamps |
+| `test_tts_fallback.py` | Simulate engine failure → verify fallback chain |
+
+### 14.2 Integration Tests
+
+| Test | Description |
+|------|-------------|
+| `test_full_pipeline_with_crop.py` | End-to-end: crop + translate + render |
+| `test_overlay_rendering.py` | Render video with 3 overlays, verify visual output |
+| `test_preset_applied_to_render.py` | Load preset → start render → verify config matches |
+| `test_batch_with_mixed_settings.py` | Batch with different presets per video |
+| `test_resume_after_crop_change.py` | Stop mid-render → change crop → resume |
+
+### 14.3 Manual QA Checklist
+
+- [ ] Crop + 9:16 output + blur fill produces correct result
+- [ ] Image overlay with transparency renders cleanly
+- [ ] Color correction visible in output
+- [ ] Preset survives app restart
+- [ ] Drag-and-drop works with multiple files
+- [ ] Voice preview plays correct voice
+- [ ] Auto-ducking reduces BGM during narration
+- [ ] Batch queue handles failures gracefully
+- [ ] All new features work with checkpoint/resume
+
+---
+
+## Appendix A: New Dependencies
+
+Add to `requirements.txt`:
+```
+tkinterdnd2>=0.4.2      # Drag and drop
+transformers>=4.36.0    # MMS TTS (optional, for local Myanmar voice)
+torch>=2.1.0            # MMS TTS backend (optional)
+scipy>=1.11.0           # Audio file writing for MMS
+```
+
+## Appendix B: FFmpeg Filter Reference
+
+| Filter | Purpose | Example |
+|--------|---------|---------|
+| `crop=w:h:x:y` | Crop video | `crop=1280:720:0:140` |
+| `eq=b:c:s` | Color correction | `eq=brightness=0.05:contrast=1.1:saturation=1.3` |
+| `overlay=x:y` | Image overlay | `overlay=100:50` |
+| `scale=w:h` | Resize | `scale=1920:1080` |
+| `hflip` | Horizontal mirror | `hflip` |
+| `pad=w:h:x:y:color` | Add padding | `pad=1920:1080:0:140:black` |
+| `gblur=sigma` | Blur (for fill) | `gblur=sigma=20` |
+| `volume=expr:eval=frame` | Dynamic volume | `volume='if(between(t,1,5),0.3,1.0)':eval=frame` |
+| `fade=t=in:st=0:d=1` | Fade in | `fade=t=in:st=0:d=1` |
+
+## Appendix C: File Modification Summary
+
+| File | Changes |
+|------|---------|
+| `app/controller.py` | Add preset UI, crop UI, overlay UI, color sliders, drag-drop, batch table |
+| `app/core.py` | Integrate filter chain, SSML for Edge TTS, ducking filter |
+| `app/render_worker.py` | Pass new settings to EdgeSmartSync |
+| `services/text_overlay_service.py` | Support multiple image overlays with positions |
+| **NEW** `app/preset_manager.py` | Preset save/load/delete logic |
+| **NEW** `app/filter_chain.py` | FFmpeg filter chain builder |
+| **NEW** `app/crop_detect.py` | Auto black bar detection |
+| **NEW** `app/tts_engine.py` | TTS engine abstraction + MMS/Piper/ElevenLabs |
+| **NEW** `app/batch_manager.py` | Batch queue data model |
+| `requirements.txt` | Add new dependencies |
+| `INSTALL_REQUIREMENTS.bat` | Add MMS model download step |
+
+---
+
+*End of Document*

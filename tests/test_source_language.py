@@ -107,7 +107,8 @@ class SourceLanguageTests(unittest.TestCase):
         ui = (APP / "controller.py").read_text(encoding="utf-8")
         self.assertIn('LANGUAGE_LABELS = {"auto": "Auto-detect", **SOURCE_LANGUAGES}', ui)
         self.assertIn('"source_language": settings.get("source_language", "auto")', ui)
-        self.assertIn('target = Path(folder) / f"{source.stem}_Myanmar.mp4"', ui)
+        self.assertIn('suffix = "English" if settings.get("target_language") == "en" else "Myanmar"', ui)
+        self.assertIn('target = Path(folder) / f"{source.stem}_{suffix}.mp4"', ui)
 
 
 if __name__ == "__main__":

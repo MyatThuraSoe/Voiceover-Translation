@@ -15,22 +15,33 @@ from functools import lru_cache
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+from app_paths import app_root, resource_path
 from subtitle_fonts import myanmar_fonts
 
 DEFAULTS = dict(enabled=True, font="Myanmar Text", size=48, bold=False, color="#FFFFFF",
                 outline_color="#252525", outline_width=-1, shadow=0, box_enabled=True,
                 box_color="#383838", box_opacity=62, width=0.86, position=[0.5, 0.92])
 SAMPLE = "ကျွန်တော် အိမ်ပြန်လမ်းမှာ တစ်ယောက်တည်း လမ်းလျှောက်လာခဲ့တယ်။"
+SAMPLE_EN = "I walked home alone that night, and the whole street felt strangely quiet."
 
 
 @lru_cache(maxsize=1)
 def _browser_launcher():
-    # Load this tool's own renderer by its exact path (another "services" package may be on sys.path).
-    path = Path(__file__).resolve().parents[1] / "services" / "text_overlay_service.py"
-    spec = spec_from_file_location("recap_text_overlay_service", path)
-    module = module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module._browser_candidates
+    # Prefer the bundled/copied "services" package first, then fall back to loading
+    # the renderer by its exact path (another "services" package may be on sys.path).
+    import sys
+    base = app_root()
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    try:
+        from services.text_overlay_service import _browser_candidates
+        return _browser_candidates
+    except Exception:
+        path = resource_path("services", "text_overlay_service.py")
+        spec = spec_from_file_location("recap_text_overlay_service", path)
+        module = module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module._browser_candidates
 
 
 def style(values: dict | None = None) -> dict:
@@ -69,8 +80,11 @@ def geometry(s: dict, frame: tuple[int, int]) -> tuple[int, int, int, int]:
 
 
 def _clean(text: str) -> str:
-    text = re.sub(r"\s*\([A-Za-z0-9 ,.'\-]+\)", "", str(text))
-    return re.sub(r"\s+", " ", text).strip()
+    """Drop English glosses from Burmese narration; English lines keep their own brackets."""
+    value = str(text or "")
+    if re.search(r"[\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F]", value):
+        value = re.sub(r"\s*\([A-Za-z0-9 ,.'\-]+\)", "", value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _fmt(seconds: float) -> str:
@@ -128,9 +142,17 @@ def write_timeline(cues: list[dict], blank: Path, path: Path, duration: float) -
     return path
 
 
+def _latin_font_family(font: str) -> str:
+    """English subtitles never need a Myanmar font; keep a chosen Latin family, else use Segoe UI."""
+    value = str(font or "").strip()
+    return value if value and value != "Myanmar Text" else "Segoe UI"
+
+
 class Renderer:
-    def __init__(self, values: dict, frame: tuple[int, int], folder: Path):
+    def __init__(self, values: dict, frame: tuple[int, int], folder: Path, target_language: str = "mm"):
         self.s, self.frame, self.folder = style(values), frame, folder
+        self.target_language = "en" if str(target_language or "mm").lower() == "en" else "mm"
+        self.segment_language = "en" if self.target_language == "en" else "my"
         self.width, self.height, self.x, self.y = geometry(self.s, frame)
         self.folder.mkdir(parents=True, exist_ok=True)
 
@@ -151,9 +173,10 @@ class Renderer:
             self.page = self.browser.new_page(viewport={"width": self.width, "height": self.height},
                                               device_scale_factor=1)
             s = self.s
-            font_files = myanmar_fonts().get(s["font"], [])
+            font_files = [] if self.target_language == "en" else myanmar_fonts().get(s["font"], [])
             font_css = ""
-            family = html.escape(s["font"], quote=True)
+            family = html.escape(_latin_font_family(s["font"]) if self.target_language == "en"
+                                 else s["font"], quote=True)
             if font_files:
                 chosen = next((p for p in font_files if ("bold" in p.lower()) == bool(s["bold"])), font_files[0])
                 data = base64.b64encode(Path(chosen).read_bytes()).decode()
@@ -168,7 +191,7 @@ class Renderer:
 html,body{{margin:0;background:transparent;width:100%;height:100%;overflow:hidden}}
 #card{{position:absolute;bottom:0;left:0;width:100%;box-sizing:border-box;padding:{pad}px;
 background:{panel};text-align:center}}
-#text{{font-family:'{family}','Myanmar Text',sans-serif;font-size:{s['size']}px;
+#text{{font-family:'{family}','Segoe UI','Myanmar Text',Arial,sans-serif;font-size:{s['size']}px;
 font-weight:{700 if s['bold'] else 400};line-height:1.45;white-space:pre-wrap;
 color:{s['color']};-webkit-text-stroke:{stroke}px {s['outline_color']};paint-order:stroke fill;
 text-shadow:{shadow}}}</style><div id=card><div id=text></div></div>""")
@@ -186,16 +209,17 @@ text-shadow:{shadow}}}</style><div id=card><div id=text></div></div>""")
 
     def cards(self, text: str) -> list[str]:
         """Measure shaped words with the same browser/font as the PNG; never break combining marks."""
-        return self.page.evaluate(r"""text => {
+        return self.page.evaluate(r"""arg => {
+const text=arg.text, lang=arg.lang;
 const el=document.querySelector('#text'), css=getComputedStyle(el), ctx=document.createElement('canvas').getContext('2d');
 ctx.font=`${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
 const limit=el.clientWidth, lines=[]; let line='';
-const tokens=Array.from(new Intl.Segmenter('my',{granularity:'word'}).segment(text), x=>x.segment);
+const tokens=Array.from(new Intl.Segmenter(lang,{granularity:'word'}).segment(text), x=>x.segment);
 for (const token of tokens) {
  if (ctx.measureText(line+token).width<=limit) {line+=token;continue;}
  if(line.trim()){lines.push(line.trim());line='';}
  if(ctx.measureText(token).width<=limit){line=token.trimStart();continue;}
- for(const {segment} of new Intl.Segmenter('my',{granularity:'grapheme'}).segment(token)) {
+ for(const {segment} of new Intl.Segmenter(lang,{granularity:'grapheme'}).segment(token)) {
   if(line && ctx.measureText(line+segment).width>limit){lines.push(line.trim());line='';}
   line+=segment;
  }
@@ -203,7 +227,7 @@ for (const token of tokens) {
 if(line.trim())lines.push(line.trim());
 const cards=[];for(let i=0;i<lines.length;i+=2)cards.push(lines.slice(i,i+2).join('\n'));
 return cards;
-}""", _clean(text))
+}""", {"text": _clean(text), "lang": self.segment_language})
 
     def png(self, text: str) -> Path:
         key = hashlib.sha256((self.signature + text).encode()).hexdigest()[:24]
@@ -236,8 +260,8 @@ return cards;
 
 
 def prepare(segments: list[dict], values: dict, frame: tuple[int, int], folder: Path, duration: float,
-            *, should_stop=lambda: False, log=print) -> dict:
-    with Renderer(values, frame, folder) as renderer:
+            *, should_stop=lambda: False, log=print, target_language: str = "mm") -> dict:
+    with Renderer(values, frame, folder, target_language) as renderer:
         cues = renderer.prepare(segments, should_stop=should_stop, log=log)
         blank = renderer.png("")
         timeline = write_timeline(cues, blank, folder / "subtitles.ffconcat", duration)
@@ -245,7 +269,8 @@ def prepare(segments: list[dict], values: dict, frame: tuple[int, int], folder: 
         return dict(timeline=str(timeline), srt=str(srt), x=renderer.x, y=renderer.y, cues=cues)
 
 
-def sample(values: dict, frame: tuple[int, int], folder: Path) -> Path:
-    with Renderer(values, frame, folder) as renderer:
-        cards = renderer.cards(SAMPLE)
-        return renderer.png(cards[0] if cards else SAMPLE)
+def sample(values: dict, frame: tuple[int, int], folder: Path, target_language: str = "mm") -> Path:
+    with Renderer(values, frame, folder, target_language) as renderer:
+        text = SAMPLE_EN if renderer.target_language == "en" else SAMPLE
+        cards = renderer.cards(text)
+        return renderer.png(cards[0] if cards else text)

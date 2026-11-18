@@ -14,8 +14,18 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
+try:  # optional: drag-and-drop needs tkinterdnd2 (spec §9.1)
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _DND_AVAILABLE = True
+except Exception:                       # noqa: BLE001 — app must start without the package
+    TkinterDnD, DND_FILES = None, None
+    _DND_AVAILABLE = False
+
+_AppBase = TkinterDnD.Tk if _DND_AVAILABLE else tk.Tk
+
+from app_paths import APP_VERSION, app_root, data_root, ensure_user_files, is_frozen, resource_path
 from core import (FRAME_FILLS, OUTPUT_RATIOS, QUALITY_LABELS, normalize_segments, output_canvas, probe_video_size,
                   video_quality)
 from preview_tools import probe_duration as preview_probe_duration, extract_preview_frame, scale_logo_preview
@@ -24,12 +34,20 @@ from splitter_tab import SplitterTab
 from gemini_tts import GEMINI_VOICES
 from recap_planner import SOURCE_LANGUAGES
 from recap_subtitles import SubtitleControls
+from subtitle_fonts import latin_fonts, myanmar_fonts
 from subtitle_png import geometry as subtitle_geometry, sample as subtitle_sample
+from preset_manager import PresetManager
+from batch_manager import BatchManager
+from filter_chain import (ASPECT_LOCKS, MAX_CUSTOM_OVERLAYS, build_prefilter, format_time_seconds,
+                          normalize_color, normalize_crop, normalize_overlay, overlay_visible_at,
+                          parse_time_seconds)
+from tts_engine import ENGINE_LABELS, PREVIEW_TEXT
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-CONFIG_PATH = ROOT_DIR / "config.json"
-JOBS_DIR = ROOT_DIR / "jobs"
-LOGS_DIR = ROOT_DIR / "logs"
+ROOT_DIR = app_root()
+DATA_DIR = ensure_user_files()
+CONFIG_PATH = DATA_DIR / "config.json"
+JOBS_DIR = DATA_DIR / "jobs"
+LOGS_DIR = DATA_DIR / "logs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 EVENT_PREFIX = "@@VRS_EVENT@@"
@@ -48,10 +66,95 @@ PREVIEW_W = 640
 PREVIEW_H = 360
 
 EDGE_VOICES = ("my-MM-ThihaNeural", "my-MM-NilarNeural")
+
+# English Edge TTS voices (2026-11): the narrator rewrites English wording instead of translating to Burmese.
+# en-GB-RyanNeural is first: it is the requested default for English UK.
+EDGE_VOICES_EN = (
+    "en-GB-RyanNeural",
+    "en-GB-SoniaNeural",
+    "en-GB-LibbyNeural",
+    "en-GB-MaisieNeural",
+    "en-GB-ThomasNeural",
+    "en-US-GuyNeural",
+    "en-US-AriaNeural",
+    "en-US-JennyNeural",
+    "en-US-ChristopherNeural",
+    "en-US-EricNeural",
+    "en-US-MichelleNeural",
+    "en-US-RogerNeural",
+    "en-US-SteffanNeural",
+    "en-AU-WilliamNeural",
+    "en-AU-NatashaNeural",
+    "en-CA-LiamNeural",
+    "en-CA-ClaraNeural",
+    "en-IE-ConnorNeural",
+    "en-IE-EmilyNeural",
+    "en-IN-PrabhatNeural",
+    "en-IN-NeerjaNeural",
+    "en-NZ-MitchellNeural",
+    "en-NZ-MollyNeural",
+    "en-ZA-LukeNeural",
+    "en-ZA-LeahNeural",
+    "en-HK-SamNeural",
+    "en-HK-YanNeural",
+    "en-KE-ChilembaNeural",
+    "en-KE-AsiliaNeural",
+    "en-NG-AbeoNeural",
+    "en-NG-EzinneNeural",
+    "en-PH-JamesNeural",
+    "en-PH-RosaNeural",
+    "en-SG-WayneNeural",
+    "en-SG-LunaNeural",
+    "en-TZ-ElimuNeural",
+    "en-TZ-ImaniNeural",
+)
 NARRATOR_VOICES = EDGE_VOICES + GEMINI_VOICES        # gemini_tts.py: one narrator voice for the whole video
+NARRATOR_VOICES_EN = EDGE_VOICES_EN + GEMINI_VOICES
+TARGET_LABELS = {"mm": "Myanmar  ·  translate", "en": "English  ·  rewrite"}
 FILL_LABELS = {"blur": "Blur background", "black": "Black bars", "crop": "Crop to fill"}
 # Source language (2026-10-17): any language → Myanmar; Auto-detect asks Whisper which language the video speaks.
 LANGUAGE_LABELS = {"auto": "Auto-detect", **SOURCE_LANGUAGES}
+ENGLISH_PREVIEW_TEXT = ("This is a short sample of the English narrator. "
+                        "Tonight, we follow a story of secrets, danger, and one impossible choice.")
+
+
+def _latin_title_font() -> str:
+    """A bold Latin font file for English title/extra-text overlays (Windows)."""
+    windir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for name in ("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf", "calibrib.ttf", "verdanab.ttf",
+                 "tahomabd.ttf", "segoeui.ttf", "arial.ttf"):
+        path = windir / name
+        if path.is_file():
+            return str(path)
+    return ""
+
+# V2 (spec §9.5): actionable hints appended to worker errors.
+ERROR_SUGGESTIONS = {
+    "Edge TTS returned no usable MP3": "Check your internet connection and try again — Edge TTS sometimes has transient failures.",
+    "Edge TTS stopped at line": "Check your connection. The checkpoint keeps finished lines; press START / RESUME to continue.",
+    "Gemini API key": "Check your .env file. Get a free key at aistudio.google.com/apikey",
+    "ffmpeg not found": "Run INSTALL_REQUIREMENTS.bat to download FFmpeg automatically.",
+    "ffprobe": "Run INSTALL_REQUIREMENTS.bat — ffprobe.exe belongs next to ffmpeg.exe.",
+    "CUDA out of memory": "Close other GPU applications, or set WHISPER_DEVICE=cpu in config.json.",
+    "No such file or directory": "A referenced file is missing. Check the logo / overlay / source paths in the settings.",
+    "Production overlay render failed": "Check the logo and custom overlay images (valid PNG/JPG). Try disabling them to isolate the problem.",
+    "All TTS engines failed": "No TTS engine could produce audio. Check the network, or switch the Engine back to Edge TTS.",
+    "MMS Myanmar TTS needs": "Install the optional local voice: python -m pip install transformers torch scipy",
+}
+
+# One-click viral format buttons (spec §9.2): (label, settings dict).
+VIRAL_FORMATS = (
+    ("📱 9:16 Shorts", {"output_ratio": "9:16", "frame_fill": "blur", "video_quality": "1080",
+                         "zoom_factor": 1.25, "mirror_video": True}),
+    ("🖥️ 16:9 YouTube", {"output_ratio": "16:9", "frame_fill": "blur", "video_quality": "1080",
+                          "zoom_factor": 1.0, "mirror_video": False}),
+    ("⬜ 1:1 Square", {"output_ratio": "1:1", "frame_fill": "blur", "video_quality": "720",
+                        "zoom_factor": 1.10, "mirror_video": False}),
+    ("🎬 Cinematic", {"output_ratio": "16:9", "frame_fill": "crop", "video_quality": "1080",
+                       "zoom_factor": 1.08, "mirror_video": True}),
+)
+
+ASPECT_OPTIONS = tuple(ASPECT_LOCKS.keys())
 
 
 def _tool_path(cfg: dict, name: str) -> str:
@@ -85,6 +188,18 @@ def _parse_edge_rate_percent(value: object) -> int:
 def _format_edge_rate(percent: object) -> str:
     value = max(-50, min(int(round(float(percent))), 100))
     return f"{value:+d}%"
+
+
+def _parse_edge_pitch_hz(value: object) -> int:
+    text = str(value or "+0Hz").strip()
+    match = re.fullmatch(r"([+-]?\d{1,3})\s*Hz", text, re.IGNORECASE)
+    hz = int(match.group(1)) if match else 0
+    return max(-50, min(hz, 50))
+
+
+def _format_edge_pitch(hz: object) -> str:
+    value = max(-50, min(int(round(float(hz))), 50))
+    return f"{value:+d}Hz"
 
 
 def _safe_name(text: str) -> str:
@@ -128,10 +243,10 @@ def _native_crash_message(code: int) -> str:
     return f"Child process closed with exit code {code}. run.log ကိုစစ်ပါ။"
 
 
-class App(tk.Tk):
+class App(_AppBase):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Recap → Myanmar — Narrator · Edge TTS · Smart Sync  |  Splitter")
+        self.title(f"RecapUpgrade {APP_VERSION} - Myanmar Voiceover Studio")
         self.geometry("1580x900")
         self.minsize(1100, 660)
         try:
@@ -148,15 +263,26 @@ class App(tk.Tk):
         self.run_log_path: Path | None = None
         self.proc_lock = threading.Lock()
 
-        self.gemini_env = tk.StringVar(value=self.cfg.get("gemini_env_path") or str(ROOT_DIR / ".env"))
+        self.gemini_env = tk.StringVar(value=self.cfg.get("gemini_env_path") or str(DATA_DIR / ".env"))
         self.source = tk.StringVar(value="")
         self.source_title = tk.StringVar(value="")
         saved_language = str(self.cfg.get("source_language") or "auto")
         self.source_language = tk.StringVar(value=LANGUAGE_LABELS.get(saved_language, LANGUAGE_LABELS["auto"]))
         self.final_folder = tk.StringVar(value=str(self.cfg.get("final_output_folder") or ""))
-        saved_voice = str(self.cfg.get("narrator_voice") or self.cfg.get("edge_tts_voice_mm")
-                          or self.cfg.get("edge_tts_voice") or EDGE_VOICES[0])
-        self.edge_voice = tk.StringVar(value=saved_voice if saved_voice in NARRATOR_VOICES else EDGE_VOICES[0])
+        saved_target = str(self.cfg.get("target_language") or "mm").strip().lower()
+        if saved_target not in TARGET_LABELS:
+            saved_target = "mm"
+        self.target_language = tk.StringVar(value=TARGET_LABELS[saved_target])
+        if saved_target == "en":
+            saved_voice = str(self.cfg.get("edge_tts_voice_en") or self.cfg.get("narrator_voice") or EDGE_VOICES_EN[0])
+            fallback_voice = EDGE_VOICES_EN[0]
+            voices = NARRATOR_VOICES_EN
+        else:
+            saved_voice = str(self.cfg.get("edge_tts_voice_mm") or self.cfg.get("narrator_voice")
+                              or self.cfg.get("edge_tts_voice") or EDGE_VOICES[0])
+            fallback_voice = EDGE_VOICES[0]
+            voices = NARRATOR_VOICES
+        self.edge_voice = tk.StringVar(value=saved_voice if saved_voice in voices else fallback_voice)
         self.gemini_direction = tk.StringVar(value=str(self.cfg.get("gemini_direction") or ""))
         self._subtitle_preview_key = None
         self._subtitle_preview_path = None
@@ -164,6 +290,7 @@ class App(tk.Tk):
         self._subtitle_scaled_key = None
         self._subtitle_photo = None
         self.edge_rate_percent = tk.DoubleVar(value=float(_parse_edge_rate_percent(self.cfg.get("edge_tts_rate", "+0%"))))
+        self.edge_pitch_hz = tk.IntVar(value=_parse_edge_pitch_hz(self.cfg.get("edge_tts_pitch", "+0Hz")))
         self.max_speed = tk.StringVar(value=str(self.cfg.get("max_video_speed", 1.25)))
         self.max_slow = tk.StringVar(value=str(self.cfg.get("max_video_slow", 1.35)))
         self.mirror_video = tk.BooleanVar(value=bool(self.cfg.get("mirror_video", True)))
@@ -185,6 +312,55 @@ class App(tk.Tk):
         # Folder batch: when non-empty, START processes these files one by one.
         self.batch_files: list[Path] = []
         self.batch_folder: Path | None = None
+        self.batch_manager = BatchManager()
+        self._active_batch_item = None
+        self._progress_started_at = 0.0
+        self._last_progress_key = None
+
+        # ---- V2 settings (spec §3-§10) -------------------------------------
+        self.crop_enabled = tk.BooleanVar(value=bool(self.cfg.get("crop", {}).get("enabled", False)))
+        saved_crop = normalize_crop(self.cfg.get("crop"))
+        self.crop_x = tk.DoubleVar(value=float(saved_crop["x_percent"]))
+        self.crop_y = tk.DoubleVar(value=float(saved_crop["y_percent"]))
+        self.crop_w = tk.DoubleVar(value=float(saved_crop["width_percent"]))
+        self.crop_h = tk.DoubleVar(value=float(saved_crop["height_percent"]))
+        self.crop_aspect = tk.StringVar(value=str(saved_crop["aspect_lock"]))
+        self.crop_enabled.set(bool(saved_crop["enabled"]))
+
+        saved_cc = normalize_color(self.cfg.get("color_correction"))
+        self.color_enabled = tk.BooleanVar(value=bool(saved_cc["enabled"]))
+        self.brightness = tk.DoubleVar(value=float(saved_cc["brightness"]))
+        self.contrast = tk.DoubleVar(value=float(saved_cc["contrast"]))
+        self.saturation = tk.DoubleVar(value=float(saved_cc["saturation"]))
+
+        self.custom_overlays: list[dict] = [normalize_overlay(o, i + 1) for i, o in
+                                             enumerate((self.cfg.get("custom_overlays") or [])[:MAX_CUSTOM_OVERLAYS])]
+        self.selected_overlay: int | None = None
+        self._overlay_photos: list = []
+        self._overlay_photo_cache: dict = {}
+        self._overlay_time_vars: list[tuple[tk.StringVar, tk.StringVar]] = []
+        self._overlay_window_labels: list[ttk.Label] = []
+        self.overlays_host: ttk.Frame | None = None
+
+        duck = dict(self.cfg.get("audio_ducking") or {})
+        self.ducking_enabled = tk.BooleanVar(value=bool(duck.get("enabled", False)))
+        self.duck_volume_percent = tk.IntVar(value=int(duck.get("duck_volume_percent", 30) or 30))
+
+        engine_code = str(self.cfg.get("tts_engine") or "edge_tts")
+        if engine_code not in ENGINE_LABELS:
+            engine_code = "edge_tts"
+        self.tts_engine_label = tk.StringVar(value=ENGINE_LABELS[engine_code])
+        self.edge_tts_ssml = tk.BooleanVar(value=bool(self.cfg.get("edge_tts_ssml", False)))
+        self.engine_status = tk.StringVar(value="")
+        self.preset_manager = PresetManager(
+            DATA_DIR,
+            log=lambda m: self.msgq.put(("log", str(m))),
+            factory_path=resource_path("factory_presets.json"),
+        )
+        self.preset_name = tk.StringVar(value="")
+        self._pending_preset: dict = {}
+        self._crop_box: dict | None = None
+        self._crop_drag: tuple | None = None
 
         # Minimal production editor state. V0.3 sync/mirror/freeze behavior remains hidden/fixed.
         self.title_text = tk.StringVar(value="")
@@ -215,6 +391,17 @@ class App(tk.Tk):
 
         self._apply_dark_theme()
         self._build()
+        if _DND_AVAILABLE:
+            try:
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind("<<Drop>>", self._on_file_drop)
+            except Exception as exc:            # noqa: BLE001 — Tk DnD is optional
+                self._log(f"ℹ️ Drag-and-drop unavailable: {exc}")
+        default_name = self.preset_manager.get_default_name()
+        if default_name:
+            self._load_preset(default_name, quiet=True)
+        self._refresh_preset_combo()
+        self._refresh_batch_view()
         self.after(150, self._pump)
 
     def _apply_dark_theme(self) -> None:
@@ -246,6 +433,10 @@ class App(tk.Tk):
         style.configure("TCheckbutton", background=BG, foreground=FG)
         style.map("TCheckbutton", background=[("active", BG)], foreground=[("active", FG)])
         style.configure("Horizontal.TProgressbar", troughcolor=FIELD, background=ACCENT, bordercolor=FIELD, lightcolor=ACCENT, darkcolor=ACCENT)
+        style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=FG,
+                        bordercolor=BORDER, rowheight=22)
+        style.configure("Treeview.Heading", background="#252b36", foreground=FG, bordercolor=BORDER)
+        style.map("Treeview", background=[("selected", "#2f4a78")], foreground=[("selected", "#ffffff")])
         style.configure("TNotebook", background=BG, borderwidth=0)
         style.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(14, 5), bordercolor=BORDER)
         style.map("TNotebook.Tab", background=[("selected", "#252b36")], foreground=[("selected", FG)])
@@ -277,7 +468,7 @@ class App(tk.Tk):
         header = tk.Frame(outer, bg=BG)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         tk.Label(header, text="Recap Production", bg=BG, fg=FG, font=("Segoe UI Semibold", 15)).pack(side="left")
-        tk.Label(header, text="Any language → Myanmar  |  Narrator only  |  Whisper + Gemini  |  Edge TTS  |  Smart Sync",
+        tk.Label(header, text="Any language → Myanmar / English  |  Narrator only  |  Whisper + Gemini  |  Edge TTS  |  Smart Sync",
                  bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(14, 0), pady=(5, 0))
 
         source_bar = ttk.Frame(outer)
@@ -299,7 +490,7 @@ class App(tk.Tk):
         ttk.Entry(source_bar, textvariable=self.final_folder).grid(row=1, column=1, sticky="ew", pady=(6, 0))
         ttk.Button(source_bar, text="Browse", style="Compact.TButton", command=self._browse_final_folder).grid(
             row=1, column=2, padx=(6, 18), pady=(6, 0), sticky="w")
-        ttk.Label(source_bar, text="ဗလာထားရင် job folder ထဲမှာပဲ။ ရွေးထားရင် ပြီးတဲ့ video ကို <name>_Myanmar.mp4 နဲ့ ဒီ folder ထဲ ထည့်ပေးမယ်။",
+        ttk.Label(source_bar, text="ဗလာထားရင် job folder ထဲမှာပဲ။ ရွေးထားရင် ပြီးတဲ့ video ကို <name>_Myanmar.mp4 (သို့) <name>_English.mp4 နဲ့ ဒီ folder ထဲ ထည့်ပေးမယ်။",
                   style="Muted.TLabel").grid(row=1, column=3, columnspan=3, sticky="w", pady=(6, 0))
 
         main = ttk.PanedWindow(outer, orient="horizontal")
@@ -328,19 +519,41 @@ class App(tk.Tk):
             label.grid(row=row, column=2, sticky="w", padx=(8, 0))
             return label
 
+        # ---- Presets (spec §3.5) — always at the top of the settings panel ----
+        preset_box = ttk.LabelFrame(source_box, text="Preset", padding=(6, 4))
+        preset_box.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        preset_box.columnconfigure(0, weight=1)
+        self.preset_combo = ttk.Combobox(preset_box, textvariable=self.preset_name, state="readonly",
+                                         values=(), width=26)
+        self.preset_combo.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 5))
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        preset_btns = ttk.Frame(preset_box)
+        preset_btns.grid(row=1, column=0, columnspan=3, sticky="ew")
+        ttk.Button(preset_btns, text="💾 Save As...", style="Compact.TButton",
+                   command=self._save_preset).pack(side="left")
+        ttk.Button(preset_btns, text="🗑️ Delete", style="Compact.TButton",
+                   command=self._delete_preset).pack(side="left", padx=(5, 0))
+        ttk.Button(preset_btns, text="⭐ Set Default", style="Compact.TButton",
+                   command=self._set_default_preset).pack(side="left", padx=(5, 0))
+
         ttk.Label(source_box, text="Source language").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
         ttk.Combobox(source_box, textvariable=self.source_language, state="readonly",
                      values=tuple(LANGUAGE_LABELS.values())).grid(row=1, column=1, sticky="ew", pady=3)
         hint(1, "ဗီဒီယိုထဲက ပြောတဲ့ ဘာသာ။ Auto-detect = Whisper က နားထောင်ပြီး သိအောင်လုပ်မယ်")
         ttk.Label(source_box, text="Output").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=3)
-        ttk.Label(source_box, text="Myanmar  ·  Narrator only  ·  Edge / Gemini TTS").grid(
-            row=2, column=1, columnspan=2, sticky="w", pady=3)
+        self.target_combo = ttk.Combobox(source_box, textvariable=self.target_language, state="readonly",
+                                         values=tuple(TARGET_LABELS.values()))
+        self.target_combo.grid(row=2, column=1, sticky="ew", pady=3)
+        self.target_combo.bind("<<ComboboxSelected>>", lambda _e: self._target_changed())
+        self.target_hint = hint(2, "Myanmar = translate  ·  English = rewrite the English wording, same meaning")
+        self.target_hint.configure(text=self._target_hint_text())
 
         self.edge_voice_label = ttk.Label(source_box, text="Narrator Voice")
         self.edge_voice_label.grid(row=11, column=0, sticky="w", padx=(0, 8), pady=3)
-        self.edge_voice_combo = ttk.Combobox(source_box, textvariable=self.edge_voice, state="readonly", values=NARRATOR_VOICES)
+        self.edge_voice_combo = ttk.Combobox(source_box, textvariable=self.edge_voice, state="readonly",
+                                             values=self._narrator_voices())
         self.edge_voice_combo.grid(row=11, column=1, sticky="ew", pady=3)
-        self.edge_voice_hint = hint(11, "my-MM = Edge TTS · gemini: = Gemini TTS (.env keys) — one voice all through")
+        self.edge_voice_hint = hint(11, self._narrator_voice_hint())
 
         self.edge_speed_label = ttk.Label(source_box, text="Narrator Speed")
         self.edge_speed_label.grid(row=12, column=0, sticky="w", padx=(0, 8), pady=3)
@@ -359,6 +572,36 @@ class App(tk.Tk):
         ttk.Label(source_box, text="Gemini voice style").grid(row=13, column=0, sticky="w", padx=(0, 8), pady=3)
         ttk.Entry(source_box, textvariable=self.gemini_direction).grid(row=13, column=1, sticky="ew", pady=3)
         hint(13, "Gemini only, e.g. calm storyteller — the voice itself never changes")
+
+        # ---- V2 TTS engine (spec §7.4 / §9.3) --------------------------------
+        ttk.Label(source_box, text="Engine").grid(row=14, column=0, sticky="w", padx=(0, 8), pady=3)
+        engine_combo = ttk.Combobox(source_box, textvariable=self.tts_engine_label, state="readonly",
+                                    values=tuple(ENGINE_LABELS.values()))
+        engine_combo.grid(row=14, column=1, sticky="ew", pady=3)
+        engine_combo.bind("<<ComboboxSelected>>", lambda _e: self._engine_changed())
+        hint(14, "Edge = free + reliable · MMS/Piper = local · ElevenLabs needs a free-tier key")
+        ttk.Button(source_box, text="▶ Preview Voice", style="Compact.TButton",
+                   command=self._preview_voice).grid(row=15, column=1, sticky="w", pady=3)
+        ttk.Checkbutton(source_box, text="Natural pauses (SSML)",
+                        variable=self.edge_tts_ssml).grid(row=15, column=0, sticky="w", pady=3)
+        hint(15, "Myanmar sentence breaks → short pauses. Edge TTS only.")
+        self.engine_status_label = ttk.Label(source_box, textvariable=self.engine_status,
+                                             style="Muted.TLabel", wraplength=320, justify="left")
+        self.engine_status_label.grid(row=16, column=0, columnspan=3, sticky="w", pady=(2, 4))
+
+        ttk.Label(source_box, text="Narrator Pitch").grid(row=17, column=0, sticky="w", padx=(0, 8), pady=3)
+        pitch_frame = ttk.Frame(source_box)
+        pitch_frame.grid(row=17, column=1, sticky="ew", pady=3)
+        pitch_frame.columnconfigure(0, weight=1)
+        self.edge_pitch_value = ttk.Label(pitch_frame, text=_format_edge_pitch(self.edge_pitch_hz.get()), width=7)
+        self.edge_pitch_slider = ttk.Scale(
+            pitch_frame, from_=-50, to=50, orient="horizontal",
+            variable=self.edge_pitch_hz, command=self._pitch_changed,
+        )
+        self.edge_pitch_slider.grid(row=0, column=0, sticky="ew")
+        self.edge_pitch_value.grid(row=0, column=1, padx=(8, 0))
+        hint(17, "-50Hz lower · +0Hz natural · +50Hz higher (Edge TTS only)")
+        self._engine_changed()
 
         self._bind_wheel_recursive(source_box, settings_canvas)
         self._settings_canvas = settings_canvas
@@ -381,6 +624,7 @@ class App(tk.Tk):
         self.preview_canvas.bind("<ButtonPress-1>", self._preview_press)
         self.preview_canvas.bind("<B1-Motion>", self._preview_motion)
         self.preview_canvas.bind("<ButtonRelease-1>", self._preview_release)
+        self.preview_canvas.bind("<Double-Button-1>", self._preview_double_click)
         self.preview_canvas.bind("<Configure>", self._preview_resized)
         self._preview_resize_job = None
         self._preview_canvas_size = (PREVIEW_W, PREVIEW_H)
@@ -390,7 +634,7 @@ class App(tk.Tk):
         seek_row.columnconfigure(1, weight=1)
         ttk.Button(seek_row, text="◀ 5s", width=5, style="Compact.TButton", command=lambda: self._seek_preview(-5)).grid(row=0, column=0, padx=(0, 6))
         self.preview_slider = ttk.Scale(seek_row, from_=0.0, to=1.0, orient="horizontal", variable=self.preview_time,
-                                        command=lambda _v: self._update_preview_time_label())
+                                        command=lambda _v: self._update_preview_time_label(redraw=True))
         self.preview_slider.grid(row=0, column=1, sticky="ew")
         self.preview_slider.bind("<ButtonRelease-1>", lambda _e: self._refresh_preview())
         ttk.Button(seek_row, text="5s ▶", width=5, style="Compact.TButton", command=lambda: self._seek_preview(5)).grid(row=0, column=2, padx=(6, 8))
@@ -523,6 +767,135 @@ class App(tk.Tk):
         section(22, "Narration Subtitle")
         self.subtitle_controls = SubtitleControls(tools, self.cfg.get("subtitles"), self._subtitle_changed)
         self.subtitle_controls.grid(row=23, column=0, sticky="ew", pady=(5, 10))
+        if self._target_code() == "en":
+            try:
+                self.subtitle_controls.set_font_choices(latin_fonts())
+            except Exception:
+                pass
+
+        # ================= V2 production tools (spec §3-§10) =================
+        # One-click viral formats (§9.2)
+        viral = ttk.Frame(tools)
+        viral.grid(row=30, column=0, sticky="ew", pady=(2, 10))
+        for i, (label, _fmt) in enumerate(VIRAL_FORMATS):
+            ttk.Button(viral, text=label, style="Compact.TButton",
+                       command=lambda name=label: self._apply_viral_format(name)).grid(
+                           row=i // 2, column=i % 2, sticky="ew", padx=(0 if i % 2 == 0 else 4, 0), pady=2)
+        viral.columnconfigure(0, weight=1)
+        viral.columnconfigure(1, weight=1)
+
+        # ---- Crop (§5) ----
+        section(32, "Crop — remove black bars / watermarks")
+        crop_box = ttk.Frame(tools)
+        crop_box.grid(row=33, column=0, sticky="ew", pady=(4, 2))
+        crop_box.columnconfigure(1, weight=1)
+        ttk.Checkbutton(crop_box, text="Enable crop", variable=self.crop_enabled,
+                        command=self._crop_toggled).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Button(crop_box, text="Auto-detect black bars", style="Compact.TButton",
+                   command=self._auto_detect_crop).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Button(crop_box, text="Reset (full frame)", style="Compact.TButton",
+                   command=self._reset_crop).grid(row=1, column=1, sticky="w", pady=(5, 0), padx=(5, 0))
+        ttk.Label(crop_box, text="Aspect lock").grid(row=2, column=0, sticky="w", pady=(5, 0))
+        ttk.Combobox(crop_box, textvariable=self.crop_aspect, values=ASPECT_OPTIONS,
+                     state="readonly", width=10).grid(row=2, column=1, sticky="w", pady=(5, 0), padx=(5, 0))
+        for r, (text, var, low, high) in enumerate((
+                ("X", self.crop_x, 0.0, 1.0), ("Y", self.crop_y, 0.0, 1.0),
+                ("Width", self.crop_w, 0.02, 1.0), ("Height", self.crop_h, 0.02, 1.0)), start=3):
+            ttk.Label(crop_box, text=text, width=7).grid(row=r, column=0, sticky="w")
+            ttk.Scale(crop_box, from_=low, to=high, orient="horizontal", variable=var,
+                      command=lambda _v: self._crop_slider_changed()).grid(row=r, column=1, sticky="ew", pady=1)
+        self.crop_dim_label = ttk.Label(crop_box, text="", style="Muted.TLabel")
+        self.crop_dim_label.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(tools, text="Drag the crop box / its handles on the preview",
+                  style="Muted.TLabel").grid(row=34, column=0, sticky="w", pady=(0, 8))
+
+        # ---- Color correction (§6) ----
+        section(36, "Color Correction")
+        color_box = ttk.Frame(tools)
+        color_box.grid(row=37, column=0, sticky="ew", pady=(4, 8))
+        color_box.columnconfigure(1, weight=1)
+        ttk.Checkbutton(color_box, text="Enable", variable=self.color_enabled,
+                        command=self._color_changed).grid(row=0, column=0, columnspan=3, sticky="w")
+        for r, (text, var, low, high, fmt) in enumerate((
+                ("Brightness", self.brightness, -0.5, 0.5, "{:+.2f}"),
+                ("Contrast", self.contrast, 0.5, 2.0, "{:.2f}"),
+                ("Saturation", self.saturation, 0.0, 3.0, "{:.2f}")), start=1):
+            ttk.Label(color_box, text=text, width=10).grid(row=r, column=0, sticky="w")
+            ttk.Scale(color_box, from_=low, to=high, orient="horizontal", variable=var,
+                      command=lambda _v: self._color_changed()).grid(row=r, column=1, sticky="ew", pady=1)
+            lbl = ttk.Label(color_box, text=fmt.format(var.get()), width=6, anchor="e")
+            lbl.grid(row=r, column=2, padx=(6, 0))
+            var.trace_add("write", lambda *_a, v=var, l=lbl, f=fmt: self._safe_label(l, f.format(float(v.get()))))
+        ttk.Button(color_box, text="Reset to Default", style="Compact.TButton",
+                   command=self._reset_color).grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        # ---- Custom image overlays (§4) ----
+        section(39, "Custom Image Overlays")
+        ov_head = ttk.Frame(tools)
+        ov_head.grid(row=40, column=0, sticky="ew", pady=(4, 4))
+        ttk.Button(ov_head, text="+ Add Image", style="Compact.TButton",
+                   command=self._add_custom_overlay).pack(side="left")
+        self.overlay_count_label = ttk.Label(ov_head, text="0 / 5", style="Muted.TLabel")
+        self.overlay_count_label.pack(side="left", padx=(8, 0))
+        self.overlays_host = ttk.Frame(tools)
+        self.overlays_host.grid(row=41, column=0, sticky="ew", pady=(0, 8))
+        self.overlays_host.columnconfigure(0, weight=1)
+        self._rebuild_overlay_rows()
+
+        # ---- Audio ducking (§8) ----
+        section(43, "Audio Ducking")
+        duck_box = ttk.Frame(tools)
+        duck_box.grid(row=44, column=0, sticky="ew", pady=(4, 8))
+        duck_box.columnconfigure(1, weight=1)
+        ttk.Checkbutton(duck_box, text="Auto-duck background audio during narration",
+                        variable=self.ducking_enabled).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(duck_box, text="Duck level", width=10).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Scale(duck_box, from_=10, to=80, orient="horizontal", variable=self.duck_volume_percent,
+                  command=lambda _v: self.duck_value_label.configure(
+                      text=f"{int(self.duck_volume_percent.get())}%")).grid(row=1, column=1, sticky="ew", pady=(5, 0))
+        self.duck_value_label = ttk.Label(duck_box, text=f"{self.duck_volume_percent.get()}%", width=6, anchor="e")
+        self.duck_value_label.grid(row=1, column=2, padx=(6, 0), pady=(5, 0))
+        ttk.Label(duck_box, text="How quiet the original background gets while the narrator speaks",
+                  style="Muted.TLabel", wraplength=280, justify="left").grid(row=2, column=0, columnspan=3, sticky="w")
+
+        # ---- Batch queue (§10) ----
+        section(46, "Batch Queue")
+        self.skip_completed = tk.BooleanVar(value=bool(self.cfg.get("batch_skip_completed", True)))
+        self.batch_manager.skip_completed = bool(self.skip_completed.get())
+        batch_box = ttk.Frame(tools)
+        batch_box.grid(row=47, column=0, sticky="ew", pady=(4, 8))
+        batch_box.columnconfigure(0, weight=1)
+        cols = ("name", "status", "progress", "duration", "error")
+        self.batch_tree = ttk.Treeview(batch_box, columns=cols, show="headings", height=6)
+        for col, text, width in (("name", "Filename", 150), ("status", "Status", 90),
+                                 ("progress", "Progress", 62), ("duration", "Duration", 66),
+                                 ("error", "Note", 110)):
+            self.batch_tree.heading(col, text=text)
+            self.batch_tree.column(col, width=width, anchor="w", stretch=(col in ("name", "error")))
+        batch_scroll = ttk.Scrollbar(batch_box, orient="vertical", command=self.batch_tree.yview)
+        self.batch_tree.configure(yscrollcommand=batch_scroll.set)
+        self.batch_tree.grid(row=0, column=0, sticky="ew")
+        batch_scroll.grid(row=0, column=1, sticky="ns")
+        batch_btns = ttk.Frame(batch_box)
+        batch_btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        for text, cmd in (("↑ Up", self._batch_move_up), ("↓ Down", self._batch_move_down),
+                          ("🗑️ Remove", self._batch_remove), ("🔄 Retry Failed", self._batch_retry)):
+            ttk.Button(batch_btns, text=text, style="Compact.TButton", command=cmd).pack(side="left", padx=(0, 4))
+        ttk.Checkbutton(batch_box, text="Skip already completed", variable=self.skip_completed,
+                        command=self._skip_completed_changed).grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.batch_summary = ttk.Label(batch_box, text="No videos queued", style="Muted.TLabel")
+        self.batch_summary.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.batch_tree.bind("<Button-3>", self._batch_context_menu)
+        # Drag-to-reorder the queue (spec §10 BQ-05).
+        self.batch_tree.bind("<ButtonPress-1>", self._batch_drag_start, add="+")
+        self.batch_tree.bind("<ButtonRelease-1>", self._batch_drag_release, add="+")
+        self.batch_menu = tk.Menu(self, tearoff=0)
+        self.batch_menu.add_command(label="Preview video", command=self._batch_preview)
+        self.batch_menu.add_command(label="Open output folder", command=self._batch_open_folder)
+        self.batch_menu.add_command(label="Retry", command=self._batch_retry_selected)
+        self.batch_menu.add_command(label="Remove", command=self._batch_remove)
+        self._batch_menu_index = 0
+        self._batch_drag_iid: str | None = None
         self._bind_wheel_recursive(tools, tools_canvas)
         # Job resume / config loads set the IntVars directly; keep the sliders in step.
         self.title_size.trace_add("write", lambda *_a: self._sync_int_slider(self.title_size, self._title_size_scale_var, "title_size_label"))
@@ -659,7 +1032,7 @@ class App(tk.Tk):
         self._update_preview_time_label()
         self._refresh_preview()
 
-    def _update_preview_time_label(self) -> None:
+    def _update_preview_time_label(self, redraw: bool = False) -> None:
         def fmt(sec: float) -> str:
             sec = max(0, int(sec))
             h, rem = divmod(sec, 3600)
@@ -667,6 +1040,10 @@ class App(tk.Tk):
             return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
         if hasattr(self, "preview_time_label"):
             self.preview_time_label.configure(text=f"{fmt(self.preview_time.get())} / {fmt(self.preview_duration or 0)}")
+        if redraw:
+            # Timed image overlays must appear/disappear while the user scrubs,
+            # not only after the frame is re-extracted on mouse release.
+            self._redraw_custom_overlay_items()
 
     def _edge_rate_changed(self, value: str) -> None:
         try:
@@ -790,10 +1167,13 @@ class App(tk.Tk):
             ffmpeg = _tool_path(self.cfg, "ffmpeg")
             ox, oy, width, height = self._preview_bounds()
             out = LOGS_DIR / "preview_frame.png"
+            fw, fh = self.source_size if self.source_size[0] else (1920, 1080)
+            prefilter, eff_size = build_prefilter(self._crop_values(), self._color_values(), fw, fh)
             extract_preview_frame(
                 ffmpeg, src, float(self.preview_time.get()), float(self.zoom_factor.get()),
                 bool(self.mirror_video.get()), str(out), width, height,
-                ratio=self.output_ratio.get(), fill=self._fill_code(), source_size=self.source_size,
+                ratio=self.output_ratio.get(), fill=self._fill_code(), source_size=eff_size,
+                prefilter=prefilter,
             )
             self._preview_photo = tk.PhotoImage(file=str(out))
             self.preview_canvas.delete("frame")
@@ -810,6 +1190,7 @@ class App(tk.Tk):
         c = self.preview_canvas
         c.delete("editor")
         ox, oy, pw, ph = self._preview_bounds()
+        self._draw_crop_overlay(c, ox, oy, pw, ph)
         self._draw_subtitle_preview(ox, oy, pw, ph)
         self.blur_count_label.configure(text=f"{len(self.blur_boxes)} box" + ("es" if len(self.blur_boxes) != 1 else ""))
         for i, b in enumerate(self.blur_boxes):
@@ -853,6 +1234,82 @@ class App(tk.Tk):
                 c.create_image(x, y, image=self._logo_photo, anchor="nw", tags=("editor", "logo"))
             except Exception as exc:
                 self._log(f"⚠️ Logo preview error: {exc}")
+        self._draw_custom_overlays(c, ox, oy, pw, ph)
+
+    # ---- V2 preview: crop box and draggable custom overlays ----------------
+    def _draw_crop_overlay(self, c, ox, oy, pw, ph) -> None:
+        if not self.crop_enabled.get():
+            return
+        crop = self._crop_values()
+        x1 = ox + crop["x_percent"] * pw
+        y1 = oy + crop["y_percent"] * ph
+        x2 = x1 + crop["width_percent"] * pw
+        y2 = y1 + crop["height_percent"] * ph
+        shade = {"fill": "#000000", "stipple": "gray50", "outline": "", "tags": ("editor", "crop_shade")}
+        c.create_rectangle(ox, oy, ox + pw, y1, **shade)
+        c.create_rectangle(ox, y2, ox + pw, oy + ph, **shade)
+        c.create_rectangle(ox, y1, x1, y2, **shade)
+        c.create_rectangle(x2, y1, ox + pw, y2, **shade)
+        c.create_rectangle(x1, y1, x2, y2, outline="#7be0a4", width=2,
+                           tags=("editor", "crop", "crop_box"))
+        handles = ((x1, y1), ((x1 + x2) / 2, y1), (x2, y1),
+                   (x1, (y1 + y2) / 2), (x2, (y1 + y2) / 2),
+                   (x1, y2), ((x1 + x2) / 2, y2), (x2, y2))
+        for i, (hx, hy) in enumerate(handles):
+            c.create_rectangle(hx - 4, hy - 4, hx + 4, hy + 4, fill="#7be0a4", outline="#08301b",
+                               tags=("editor", "crop", f"crop_handle_{i}"))
+        c.create_text(x1 + 6, y1 + 7, text="CROP · drag edges / corners", fill="#7be0a4",
+                      anchor="nw", font=("Segoe UI", 9, "bold"), tags=("editor", "crop"))
+
+    def _redraw_custom_overlay_items(self) -> None:
+        """Repaint only the timed image overlays while the preview time changes."""
+        c = getattr(self, "preview_canvas", None)
+        if c is None:
+            return
+        c.delete("custom_overlay")
+        ox, oy, pw, ph = self._preview_bounds()
+        self._draw_custom_overlays(c, ox, oy, pw, ph)
+
+    def _draw_custom_overlays(self, c, ox, oy, pw, ph) -> None:
+        self._overlay_photos = []
+        ffmpeg = None
+        now = float(self.preview_time.get())
+        cache = self._overlay_photo_cache
+        for i, ov in enumerate(self.custom_overlays[:MAX_CUSTOM_OVERLAYS]):
+            if not ov.get("enabled", True) or not overlay_visible_at(ov, now):
+                continue
+            x = ox + float(ov["x_percent"]) * pw
+            y = oy + float(ov["y_percent"]) * ph
+            w = max(20, int(float(ov["width_percent"]) * pw))
+            path = str(ov.get("path") or "")
+            tags = ("editor", "custom_overlay", f"custom_{i}")
+            shown = False
+            key = (i, path, w)
+            photo = cache.get(key)
+            if photo is None and path and Path(path).is_file():
+                try:
+                    if ffmpeg is None:
+                        ffmpeg = _tool_path(self.cfg, "ffmpeg")
+                    tmp = LOGS_DIR / f"preview_overlay_{i}.png"
+                    scale_logo_preview(ffmpeg, path, w, str(tmp))
+                    photo = tk.PhotoImage(file=str(tmp))
+                    cache[key] = photo
+                except Exception:
+                    photo = None
+            if photo is not None:
+                self._overlay_photos.append(photo)
+                c.create_image(x, y, image=photo, anchor="nw", tags=tags)
+                shown = True
+            if not shown:
+                c.create_rectangle(x, y, x + w, y + max(16, int(w * 0.25)), fill="#3a2b45",
+                                   outline="#ffb3e6", tags=tags)
+                c.create_text(x + 4, y + 3, text=Path(path).name[:22] or "missing image",
+                              fill="#ffd6f3", anchor="nw", font=("Segoe UI", 8), tags=tags)
+            color = "#ffe066" if i == self.selected_overlay else "#ff9ee6"
+            c.create_rectangle(x, y, x + w, y + max(16, int(w * 0.25)), outline=color, width=2,
+                               dash=(5, 3), tags=tags)
+            c.create_text(x + 3, y - 12, text=f"OV{i+1}", fill=color, anchor="nw",
+                          font=("Segoe UI", 9, "bold"), tags=tags)
 
     def _quality_code(self) -> str:
         return next((code for code, label in QUALITY_LABELS.items() if label == self.quality.get()), "1080")
@@ -882,16 +1339,17 @@ class App(tk.Tk):
         if not values["enabled"]:
             return
         frame = self._output_canvas()
+        target = self._target_code()
         identity = dict(values)
         identity.pop("position")
-        key = json.dumps([identity, frame], sort_keys=True)
+        key = json.dumps([identity, frame, target], sort_keys=True)
         if key != self._subtitle_preview_key and not self._subtitle_busy:
             self._subtitle_busy = True
 
             def render():
                 path = None
                 try:
-                    path = subtitle_sample(values, frame, LOGS_DIR / "subtitle_preview")
+                    path = subtitle_sample(values, frame, LOGS_DIR / "subtitle_preview", target)
                 except Exception as exc:
                     self._log(f"⚠️ Subtitle preview: {exc}")
                 self.msgq.put(("subtitle_preview", (key, path)))
@@ -923,6 +1381,29 @@ class App(tk.Tk):
             t = self.preview_canvas.gettags(item)
             if t:
                 tags.append(t)
+
+        # V2 crop box (8 handles) and custom image overlays take priority.
+        ox, oy, pw, ph = self._preview_bounds()
+        fx, fy = (x - ox) / pw, (y - oy) / ph
+        handle = next((z for t in tags for z in t if z.startswith("crop_handle_")), None)
+        if self.crop_enabled.get() and handle:
+            self._crop_drag = ("handle", int(handle.rsplit("_", 1)[1]), fx, fy, self._crop_values())
+            return
+        if self.crop_enabled.get() and any("crop_box" in t for t in tags):
+            self._crop_drag = ("move", -1, fx, fy, self._crop_values())
+            return
+        custom = next((z for t in tags for z in t if z.startswith("custom_") and z != "custom_overlay"), None)
+        if custom:
+            idx = int(custom.rsplit("_", 1)[1])
+            self.selected_overlay = idx
+            self._drag_kind = "custom_overlay"
+            self._drag_index = idx
+            self._drag_start = (fx, fy)
+            self._drag_original = [float(self.custom_overlays[idx]["x_percent"]),
+                                   float(self.custom_overlays[idx]["y_percent"])]
+            self._redraw_editor_items()
+            return
+
         self._drag_kind = None
         self._drag_index = None
         self._drag_start = (x, y)
@@ -943,10 +1424,37 @@ class App(tk.Tk):
                 i=int(blur.rsplit("_",1)[1]); self.selected_blur=i; self._drag_kind="blur_move"; self._drag_index=i; self._drag_original=dict(self.blur_boxes[i]); break
         self._redraw_editor_items()
 
+    def _preview_double_click(self, event) -> None:
+        """Double-click a custom image overlay to replace its file (spec §4.4)."""
+        x, y = self._preview_xy(event)
+        for item in reversed(self.preview_canvas.find_overlapping(x - 2, y - 2, x + 2, y + 2)):
+            for tag in self.preview_canvas.gettags(item):
+                if tag.startswith("custom_") and tag != "custom_overlay":
+                    try:
+                        index = int(tag.rsplit("_", 1)[1])
+                    except ValueError:
+                        return
+                    if 0 <= index < len(self.custom_overlays):
+                        self.selected_overlay = index
+                        self._browse_custom_overlay(index)
+                    return
+
     def _preview_motion(self, event) -> None:
         x, y = self._preview_xy(event)
         if self._draw_blur_mode and self._draw_start and self._temp_rect:
             self.preview_canvas.coords(self._temp_rect, self._draw_start[0], self._draw_start[1], x, y)
+            return
+        if self._crop_drag:
+            self._apply_crop_drag(x, y)
+            return
+        if self._drag_kind == "custom_overlay" and self._drag_index is not None and self._drag_start:
+            ox, oy, pw, ph = self._preview_bounds()
+            sx, sy = self._drag_original
+            fx, fy = (x - ox) / pw, (y - oy) / ph
+            ov = self.custom_overlays[self._drag_index]
+            ov["x_percent"] = self._clampf(sx + fx - self._drag_start[0], 0.0, 0.98)
+            ov["y_percent"] = self._clampf(sy + fy - self._drag_start[1], 0.0, 0.98)
+            self._redraw_editor_items()
             return
         if not self._drag_kind or not self._drag_start:
             return
@@ -973,6 +1481,10 @@ class App(tk.Tk):
 
     def _preview_release(self, event) -> None:
         x, y = self._preview_xy(event)
+        if self._crop_drag:
+            self._crop_drag = None
+            self._redraw_editor_items()
+            return
         if self._draw_blur_mode and self._draw_start:
             ox, oy, pw, ph = self._preview_bounds()
             x1,y1=self._draw_start; x2,y2=x,y
@@ -1008,6 +1520,10 @@ class App(tk.Tk):
         self.msgq.put(("log", str(text)))
 
     def _set_progress(self, current: int, total: int, label: str) -> None:
+        # Also track the active batch row from the worker thread (spec §10 BQ-03).
+        item = self._active_batch_item
+        if item is not None and total:
+            item.progress = max(0.0, min(100.0, current * 100.0 / total))
         self.msgq.put(("progress", (current, total, label)))
 
     def _pump(self) -> None:
@@ -1023,9 +1539,22 @@ class App(tk.Tk):
                     current, total, label = payload
                     pct = 0 if not total else current * 100.0 / total
                     self.progress["value"] = max(0, min(100, pct))
-                    self.status.set(str(label))
+                    # Per-video progress for the batch tree (spec §10 BQ-03).
+                    if self._active_batch_item is not None:
+                        self._active_batch_item.progress = max(0.0, min(100.0, pct))
+                        self._update_batch_row(self._active_batch_item)
+                    if not self._progress_started_at:
+                        self._progress_started_at = time.monotonic()
+                    eta = self._update_progress_eta(int(current), int(total),
+                                                   time.monotonic() - self._progress_started_at)
+                    self.status.set(f"{label} | {eta}" if int(total) > 1 else str(label))
                 elif kind == "stage":
+                    self._progress_started_at = time.monotonic()
                     self.stage.set(str(payload))
+                elif kind == "batch_refresh":
+                    self._refresh_batch_view()
+                elif kind == "crop_detected":
+                    self._apply_crop_detection(payload)
                 elif kind == "subtitle_preview":
                     key, path = payload
                     self._subtitle_busy = False
@@ -1043,7 +1572,9 @@ class App(tk.Tk):
                     self._running(False)
                     self.status.set("ERROR")
                     self.stage.set("Stopped")
-                    messagebox.showerror("ERROR", str(payload))
+                    hint = self.suggest_for_error(str(payload))
+                    self._log(f"💡 Suggested fix: {hint}")
+                    messagebox.showerror("ERROR", f"{payload}\n\n💡 Suggested fix:\n{hint}")
                     failed_segment = failed_segment_from_error(str(payload))
                     if failed_segment and messagebox.askyesno(
                         "Edit Text",
@@ -1064,18 +1595,73 @@ class App(tk.Tk):
     def _source_language_code(self) -> str:
         return next((code for code, label in LANGUAGE_LABELS.items() if label == self.source_language.get()), "auto")
 
+    def _target_code(self) -> str:
+        return next((code for code, label in TARGET_LABELS.items() if label == self.target_language.get()), "mm")
+
+    def _narrator_voices(self) -> tuple[str, ...]:
+        return NARRATOR_VOICES_EN if self._target_code() == "en" else NARRATOR_VOICES
+
+    def _target_hint_text(self) -> str:
+        return ("English: rewrite the English wording (not translate) · en-GB-Ryan = British narrator"
+                if self._target_code() == "en" else
+                "Myanmar = translate  ·  English = rewrite the English wording, same meaning")
+
+    def _narrator_voice_hint(self) -> str:
+        return ("en-GB-Ryan = English UK · en-US/en-AU/... = other English accents · gemini: = Gemini TTS"
+                if self._target_code() == "en" else
+                "my-MM = Edge TTS · gemini: = Gemini TTS (.env keys) — one voice all through")
+
+    def _set_target(self, code: str) -> None:
+        if code not in TARGET_LABELS:
+            code = "mm"
+        self.target_language.set(TARGET_LABELS[code])
+        self._target_changed()
+
+    def _target_changed(self) -> None:
+        """Switch the voice list and subtitle font list between Myanmar and English output."""
+        code = self._target_code()
+        voices = self._narrator_voices()
+        if hasattr(self, "edge_voice_combo"):
+            self.edge_voice_combo.configure(values=voices)
+            if self.edge_voice.get() not in voices:
+                stored = str(self.cfg.get(f"edge_tts_voice_{code}") or "")
+                self.edge_voice.set(stored if stored in voices else voices[0])
+        if hasattr(self, "edge_voice_hint"):
+            self.edge_voice_hint.configure(text=self._narrator_voice_hint())
+        if hasattr(self, "target_hint"):
+            self.target_hint.configure(text=self._target_hint_text())
+        if hasattr(self, "subtitle_controls"):
+            try:
+                families = latin_fonts() if code == "en" else list(myanmar_fonts())
+                self.subtitle_controls.set_font_choices(families)
+            except Exception:
+                pass
+        self.cfg["target_language"] = code
+        save_config(self.cfg)
+        self._subtitle_preview_key = None
+        self._draw_subtitle_preview(*self._subtitle_preview_origin())
+        self._log(f"🌐 Output: {'English (rewrite)' if code == 'en' else 'Myanmar (translate)'}")
+
+    def _subtitle_preview_origin(self) -> tuple[int, int, int, int]:
+        try:
+            return self._preview_bounds()
+        except Exception:
+            return 0, 0, PREVIEW_W, PREVIEW_H
+
     def _browse_env(self) -> None:
         current = self.gemini_env.get().strip()
-        initial = str(Path(current).parent) if current else str(ROOT_DIR.parent)
+        initial = str(Path(current).parent) if current else str(DATA_DIR)
         p = filedialog.askopenfilename(title="Select .env containing GEMINI_API_KEY", initialdir=initial, filetypes=[("ENV", ".env"), ("All", "*.*")])
         if p:
             self.gemini_env.set(p)
 
     def _clear_batch(self) -> None:
-        if self.batch_files:
+        if self.batch_files or self.batch_manager.queue:
             self.batch_files = []
             self.batch_folder = None
-            self.start_btn.configure(text="START / RESUME")
+            self.batch_manager.queue.clear()
+            self._active_batch_item = None
+            self._refresh_batch_view()
 
     def _browse_folder(self) -> None:
         folder = filedialog.askdirectory(title="Select folder of source videos")
@@ -1088,14 +1674,15 @@ class App(tk.Tk):
         # Load the first video so preview / editor overlays / plan state work as usual.
         self._load_source(str(files[0]))
         self.batch_folder = Path(folder)
-        self.batch_files = files
-        self.start_btn.configure(text=f"START BATCH ({len(files)})")
+        self.batch_manager.queue.clear()
+        self.batch_manager.add_files(files)
+        self._refresh_batch_view()
         self.job_display.set(f"Batch: {len(files)} video(s) · {Path(folder).name}")
         self._log(f"📂 Folder batch: {len(files)} video(s) in {folder}")
         for i, f in enumerate(files, 1):
             done = " (already done — will skip)" if _job_final_output(_job_dir_for(f)) else ""
             self._log(f"   {i}. {f.name}{done}")
-        self._log("ℹ️ Title / Logo / Blur settings on screen are applied to every video in the batch.")
+        self._log("ℹ️ Title / Logo / Blur / Crop / Color / Overlay settings on screen are applied to every video in the batch.")
 
     def _browse_source(self) -> None:
         p = filedialog.askopenfilename(title="Select source video", filetypes=[("Video", "*.mp4 *.mkv *.mov *.webm *.avi"), ("All", "*.*")])
@@ -1134,6 +1721,17 @@ class App(tk.Tk):
                     self.extra_text_pos = list(ed.get("extra_text_position") or self.extra_text_pos)
                     self.extra_text_size.set(int(ed.get("extra_text_font_size", self.extra_text_size.get())))
                     self.extra_text_opacity.set(float(ed.get("extra_text_opacity", self.extra_text_opacity.get())))
+                    # V2 job settings (spec §4, §5, §8)
+                    if isinstance(ed.get("crop"), dict):
+                        self._apply_crop_values(ed["crop"])
+                    if isinstance(ed.get("color_correction"), dict):
+                        self._apply_color_values(ed["color_correction"])
+                    if isinstance(ed.get("audio_ducking"), dict):
+                        self._apply_ducking_values(ed["audio_ducking"])
+                    if isinstance(ed.get("custom_overlays"), list):
+                        self.custom_overlays = [normalize_overlay(o, i + 1) for i, o in
+                                                enumerate(ed["custom_overlays"][:MAX_CUSTOM_OVERLAYS])]
+                        self._rebuild_overlay_rows()
                 except Exception as exc:
                     self._log(f"⚠️ Editor layout resume error: {exc}")
             self.job_display.set(f"Job: {job.name}")
@@ -1152,13 +1750,16 @@ class App(tk.Tk):
     def _save_cfg(self, settings: dict) -> None:
         self.cfg["gemini_env_path"] = settings["gemini_env_path"]
         self.cfg["source_language"] = settings["source_language"]
+        target = str(settings.get("target_language") or "mm")
+        self.cfg["target_language"] = target
         self.cfg["final_output_folder"] = settings["final_output_folder"]
         self.cfg["reuse_transcript_and_plan"] = settings["reuse_transcript_and_plan"]
-        self.cfg["edge_tts_voice_mm"] = settings["edge_tts_voice"]
+        self.cfg[f"edge_tts_voice_{target}"] = settings["edge_tts_voice"]
         self.cfg["narrator_voice"] = settings["voice"]
         self.cfg["gemini_direction"] = settings["gemini_direction"]
         self.cfg["subtitles"] = settings["overlays"]["subtitles"]
         self.cfg["edge_tts_rate"] = settings["edge_tts_rate"]
+        self.cfg["edge_tts_pitch"] = settings["edge_tts_pitch"]
         # Engine settings stay fixed/hidden; only user-facing production values persist.
         self.cfg["zoom_factor"] = settings["zoom_factor"]
         self.cfg["mirror_video"] = bool(settings["mirror_video"])
@@ -1177,6 +1778,13 @@ class App(tk.Tk):
         self.cfg["extra_text_position"] = settings["overlays"].get("extra_text_position", [0.50, 0.84])
         self.cfg["extra_text_font_size"] = settings["overlays"].get("extra_text_font_size", 42)
         self.cfg["extra_text_opacity"] = settings["overlays"].get("extra_text_opacity", 0.65)
+        # V2 settings (spec §3-§8) must survive an app restart as well.
+        self.cfg["crop"] = settings.get("crop") or self._crop_values()
+        self.cfg["color_correction"] = settings.get("color_correction") or self._color_values()
+        self.cfg["custom_overlays"] = [dict(o) for o in (settings.get("custom_overlays") or self.custom_overlays)]
+        self.cfg["audio_ducking"] = settings.get("audio_ducking") or self._ducking_values()
+        self.cfg["tts_engine"] = str(settings.get("tts_engine") or self._tts_engine_code())
+        self.cfg["edge_tts_ssml"] = bool(settings.get("edge_tts_ssml", self.edge_tts_ssml.get()))
         self.cfg["preview_seek_seconds"] = float(self.preview_time.get())
         save_config(self.cfg)
 
@@ -1189,8 +1797,14 @@ class App(tk.Tk):
             raise ValueError("Source video ကိုရွေးပါ။")
         if gemini_env is not None and not gemini_env.is_file():
             raise ValueError("Gemini .env path မမှန်ပါ။ Gemini .env မှာ Browse နှိပ်ပြီး GEMINI_API_KEY ပါတဲ့ .env ဖိုင်ကိုရွေးပါ။")
-        if voice not in NARRATOR_VOICES:
+        target = self._target_code()
+        if voice not in self._narrator_voices():
             raise ValueError("Narrator Voice ကိုရွေးပါ။")
+        if target == "en" and self._source_language_code() not in ("auto", "en"):
+            raise ValueError(
+                "English mode rewrites an English video.\n"
+                "Choose English in Source language, or switch Output to Myanmar (translate)."
+            )
         for tool in ("ffmpeg", "ffprobe"):
             if not Path(_tool_path(self.cfg, tool)).is_file():  # otherwise the job dies with "[WinError 2]"
                 raise ValueError(
@@ -1206,8 +1820,12 @@ class App(tk.Tk):
         zoom = float(self.zoom_factor.get())
         if not (1.0 <= zoom <= 1.25):
             raise ValueError("Zoom must be between 1.00 and 1.25")
+        self._commit_overlay_times()
         logo_enabled = bool(self.logo_enabled.get())
         logo_path = self.logo_path.get().strip() if logo_enabled else ""
+        target = self._target_code()
+        latin_font = _latin_title_font() if target == "en" else ""
+        title_font = latin_font or str(self.cfg.get("title_font_path", r"C:\Windows\Fonts\mmrtext.ttf"))
         overlays = {
             "subtitles": self.subtitle_controls.values(),
             "blur_boxes": [dict(x) for x in self.blur_boxes],
@@ -1215,7 +1833,8 @@ class App(tk.Tk):
             "title_text": self.title_text.get().strip(),
             "title_position": [float(self.title_pos[0]), float(self.title_pos[1])],
             "title_font_size": int(self.title_size.get()),
-            "title_font_path": str(self.cfg.get("title_font_path", r"C:\Windows\Fonts\mmrtext.ttf")),
+            "title_font_path": title_font,
+            "title_use_source_font": bool(latin_font),
             "logo_enabled": logo_enabled,
             "logo_path": logo_path,
             "logo_position": [float(self.logo_pos[0]), float(self.logo_pos[1])],
@@ -1225,6 +1844,8 @@ class App(tk.Tk):
             "extra_text_position": [float(self.extra_text_pos[0]), float(self.extra_text_pos[1])],
             "extra_text_font_size": int(self.extra_text_size.get()),
             "extra_text_opacity": float(self.extra_text_opacity.get()),
+            # Persisted with the job editor layout too (spec §4 / §12).
+            "custom_overlays": [dict(o) for o in self.custom_overlays],
         }
         if overlays["logo_path"] and not Path(overlays["logo_path"]).is_file():
             raise ValueError("Logo image path မမှန်ပါ။")
@@ -1234,14 +1855,18 @@ class App(tk.Tk):
                 Path(final_folder).mkdir(parents=True, exist_ok=True)
             except OSError as exc:
                 raise ValueError(f"Save final to: folder ကို မဖန်တီးနိုင်ပါ ({exc})")
+        tts_engine = self._tts_engine_code()
+        if target == "en" and tts_engine in ("mms_myanmar", "piper"):
+            tts_engine = "edge_tts"          # local engines are Burmese-only; English uses Edge / Gemini
         return {
             "source": source,
             "source_language": self._source_language_code(),
+            "target_language": target,
             "final_output_folder": final_folder,
             "source_title": self.source_title.get().strip() or source.stem,
             "edge_tts_voice": voice,
             "edge_tts_rate": _format_edge_rate(self.edge_rate_percent.get()),
-            "edge_tts_pitch": str(self.cfg.get("edge_tts_pitch", "+0Hz")),
+            "edge_tts_pitch": _format_edge_pitch(self.edge_pitch_hz.get()),
             "gemini_env_path": str(gemini_env) if gemini_env is not None else "",
             "voice": voice,
             "gemini_direction": self.gemini_direction.get().strip(),
@@ -1260,6 +1885,13 @@ class App(tk.Tk):
             "render_final_video": True,
             "reuse_transcript_and_plan": bool(self.cfg.get("reuse_transcript_and_plan", self.cfg.get("reuse_whisper_and_plan", True))),
             "overlays": overlays,
+            # V2 settings (spec §3-§8): these flow into _render_worker.json.
+            "crop": self._crop_values(),
+            "color_correction": self._color_values(),
+            "custom_overlays": [dict(o) for o in self.custom_overlays],
+            "audio_ducking": self._ducking_values(),
+            "tts_engine": tts_engine,
+            "edge_tts_ssml": bool(self.edge_tts_ssml.get()),
         }
 
     def _write_worker_cfg(self, path: Path, data: dict) -> None:
@@ -1271,7 +1903,14 @@ class App(tk.Tk):
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
-        cmd = [sys.executable, "-u", str(ROOT_DIR / "app" / script_name), str(cfg_path)]
+        if is_frozen():
+            # Packaged app: relaunch the same .exe in worker mode instead of
+            # running a .py file, which does not exist inside the bundle.
+            cmd = [sys.executable, "--run-worker", script_name, str(cfg_path)]
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        else:
+            cmd = [sys.executable, "-u", str(ROOT_DIR / "app" / script_name), str(cfg_path)]
+            creationflags = 0
         self._log("▶ " + " ".join(f'"{x}"' if " " in x else x for x in cmd))
         proc = subprocess.Popen(
             cmd,
@@ -1283,6 +1922,7 @@ class App(tk.Tk):
             errors="replace",
             bufsize=1,
             env=env,
+            creationflags=creationflags,
         )
         with self.proc_lock:
             self.current_proc = proc
@@ -1340,15 +1980,18 @@ class App(tk.Tk):
 
         batch = [Path(p) for p in self.batch_files]
         sources: list[Path] = batch or [settings["source"]]
+        batch_items = {item.path: item for item in self.batch_manager.queue}
 
         self.stop_event.clear()
         self._running(True)
         self.logbox.delete("1.0", "end")
         self.progress["value"] = 0
+        self._progress_started_at = time.monotonic()
         self.status.set("STARTING")
         self.stage.set("Preparing")
         self._log(f"📦 {self.source_language.get()} → Myanmar · Narrator only · Edge TTS · V2 Smart Sync")
         self._log(f"📁 App root: {ROOT_DIR}")
+        self._log(f"📁 User data: {DATA_DIR}")
         if batch:
             self._log(f"📂 Folder batch: {len(batch)} video(s) — one at a time")
 
@@ -1370,6 +2013,7 @@ class App(tk.Tk):
 
         def worker() -> None:
             if not batch:
+                self._active_batch_item = None
                 try:
                     final, job_dir = self._run_one_job(settings, sources[0], ffmpeg, ffprobe, cfg_values)
                     self.msgq.put(("done", f"ပြီးပါပြီ။\n\nOutput:\n{final}\n\nJob folder:\n{job_dir}"))
@@ -1391,14 +2035,29 @@ class App(tk.Tk):
                     break
                 label = f"[BATCH {index}/{len(sources)}] {source.name}"
                 self.msgq.put(("job", f"Batch {index}/{len(sources)} · {source.name}"))
+                item = batch_items.get(source)
+                self._active_batch_item = item
+                if item is not None:
+                    item.start()
+                    self.msgq.put(("batch_refresh", None))
                 if not source.is_file():
                     failed.append(f"{source.name} · file missing")
                     self._log(f"❌ {label} — file missing, skipped")
+                    if item is not None:
+                        self.batch_manager.mark_failed(item, "file missing")
+                    self._active_batch_item = None
+                    self.msgq.put(("batch_refresh", None))
                     continue
                 existing = _job_final_output(_job_dir_for(source))
-                if existing is not None:
+                if existing is not None and self.batch_manager.skip_completed:
                     skipped.append(source.name)
+                    if item is not None:
+                        item.skip("already completed")
+                        item.output_path = Path(existing)
+                        item.progress = 100.0
                     self._log(f"⏭️ {label} — already done ({existing.name}); job folder ဖျက်ရင် ပြန်လုပ်ပါမယ်")
+                    self._active_batch_item = None
+                    self.msgq.put(("batch_refresh", None))
                     continue
                 self._log(f"\n{'#' * 64}\n▶ {label}\n{'#' * 64}")
                 one = dict(settings)
@@ -1407,21 +2066,34 @@ class App(tk.Tk):
                 try:
                     final, _job_dir = self._run_one_job(one, source, ffmpeg, ffprobe, cfg_values, batch_mode=True)
                     ok.append(source.name)
+                    if item is not None:
+                        self.batch_manager.mark_done(item, Path(final))
                     self._log(f"✅ {label} COMPLETE → {final}")
                 except InterruptedError as exc:
                     self._log(str(exc))
                     stopped = True
                     failed.append(f"{source.name} · stopped")
+                    if item is not None:
+                        self.batch_manager.mark_failed(item, "stopped")
+                    self._active_batch_item = None
+                    self.msgq.put(("batch_refresh", None))
                     break
                 except Exception as exc:
                     self._log(traceback.format_exc())
                     first_line = (str(exc).splitlines() or [type(exc).__name__])[0]
                     failed.append(f"{source.name} · {first_line[:160]}")
+                    if item is not None:
+                        self.batch_manager.mark_failed(item, first_line)
                     self._log(f"❌ {label} FAILED — continuing with next video")
+                self._active_batch_item = None
+                self.msgq.put(("batch_refresh", None))
 
+            counts = self.batch_manager.get_summary()
             lines = [
                 f"Folder batch {'STOPPED' if stopped else 'DONE'}",
                 f"OK={len(ok)} · SKIPPED={len(skipped)} · FAILED={len(failed)} / {len(sources)}",
+                f"Queue: ✅ {counts['done']} done · ❌ {counts['failed']} failed · "
+                f"⏭️ {counts['skipped']} skipped · ⏳ {counts['pending']} pending",
             ]
             if failed:
                 lines.append("")
@@ -1430,6 +2102,7 @@ class App(tk.Tk):
             summary = "\n".join(lines)
             self._log("\n" + summary)
             self.msgq.put(("job", f"Batch: {len(sources)} video(s) · OK {len(ok)} / FAILED {len(failed)}"))
+            self.msgq.put(("batch_refresh", None))
             self.msgq.put(("error" if stopped else "done", summary))
 
         self.worker = threading.Thread(target=worker, daemon=True)
@@ -1451,7 +2124,15 @@ class App(tk.Tk):
             stop_file.unlink(missing_ok=True)
         self.msgq.put(("job", f"Batch · {job_dir.name}" if batch_mode else f"Job: {job_dir.name}"))
         try:
-            (job_dir / "editor_overlays.json").write_text(json.dumps(settings["overlays"], ensure_ascii=False, indent=2), encoding="utf-8")
+            # overlays for the production pass plus the V2 job settings that the
+            # editor restores when this source is opened again (§4/§5/§6/§8).
+            editor_data = dict(settings["overlays"])
+            editor_data["crop"] = settings.get("crop") or {}
+            editor_data["color_correction"] = settings.get("color_correction") or {}
+            editor_data["audio_ducking"] = settings.get("audio_ducking") or {}
+            editor_data["custom_overlays"] = settings.get("custom_overlays") or []
+            (job_dir / "editor_overlays.json").write_text(
+                json.dumps(editor_data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
         self._log(f"📁 Job folder: {job_dir}")
@@ -1467,6 +2148,8 @@ class App(tk.Tk):
             "reuse": settings["reuse_transcript_and_plan"],
             "stop_file": str(stop_file),
             "source_language": settings.get("source_language", "auto"),
+            "target_language": settings.get("target_language", "mm"),
+            "narrator_voice": settings.get("voice", ""),
             "whisper_model_other": cfg_values.get("whisper_model_other", "medium"),
         }
         for key in (
@@ -1490,7 +2173,8 @@ class App(tk.Tk):
             raise InterruptedError("Stopped after planner stage. START / RESUME ပြန်နှိပ်လို့ရပါတယ်။")
 
         self._log("✅ Transcript/translation complete.")
-        self._log(f"🎙️ Narrator TTS — voice={settings['voice']}")
+        self._log(f"🎙️ Narrator TTS — voice={settings['voice']} | "
+                  f"output={'English (rewrite)' if settings.get('target_language') == 'en' else 'Myanmar'}")
         time.sleep(0.2)
 
         render_cfg = job_dir / "_render_worker.json"
@@ -1519,12 +2203,22 @@ class App(tk.Tk):
             "gemini_env_path": settings.get("gemini_env_path", ""),
             "gemini_direction": settings.get("gemini_direction", ""),
             "stop_file": str(stop_file),
+            # V2 (spec §3-§8): crop, color correction, custom overlays, audio
+            # ducking and the selected TTS engine.
+            "crop": settings.get("crop") or {},
+            "color_correction": settings.get("color_correction") or {},
+            "custom_overlays": settings.get("custom_overlays") or [],
+            "audio_ducking": settings.get("audio_ducking") or {},
+            "tts_engine": settings.get("tts_engine", "edge_tts"),
+            "edge_tts_ssml": bool(settings.get("edge_tts_ssml", False)),
+            "target_language": settings.get("target_language", "mm"),
         })
         result = self._run_child("render_worker.py", render_cfg, "STEP 2 — Narrator TTS + Smart Sync").get("result") or {}
         final = result.get("final") or result.get("audio") or str(job_dir)
         folder = str(settings.get("final_output_folder") or "").strip()
         if folder and Path(final).is_file():
-            target = Path(folder) / f"{source.stem}_Myanmar.mp4"
+            suffix = "English" if settings.get("target_language") == "en" else "Myanmar"
+            target = Path(folder) / f"{source.stem}_{suffix}.mp4"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(final, target)
             self._log(f"📤 Final video saved to {target}")
@@ -1550,6 +2244,737 @@ class App(tk.Tk):
     def _running(self, yes: bool) -> None:
         self.start_btn.configure(state="disabled" if yes else "normal")
         self.stop_btn.configure(state="normal" if yes else "disabled")
+
+    # ==================================================================== V2
+    # Presets, viral formats, crop, color, custom overlays, ducking, batch,
+    # TTS engines, drag-and-drop, ETA and error suggestions (spec §3-§10).
+    # ====================================================================
+    @staticmethod
+    def _clampf(value: float, low: float = 0.0, high: float = 1.0) -> float:
+        return max(low, min(high, float(value)))
+
+    def _safe_label(self, label, text: str) -> None:
+        try:
+            label.configure(text=str(text))
+        except Exception:
+            pass
+
+    def _fill_label(self, code: str) -> str:
+        return FILL_LABELS.get(str(code), FILL_LABELS["blur"])
+
+    def _quality_label(self, code: str) -> str:
+        return QUALITY_LABELS.get(str(code), QUALITY_LABELS["1080"])
+
+    # ---- Presets (§3) -----------------------------------------------------
+    def _refresh_preset_combo(self) -> None:
+        names = self.preset_manager.get_preset_names()
+        self.preset_combo.configure(values=names)
+        current = self.preset_name.get()
+        if current not in names:
+            default = self.preset_manager.get_default_name()
+            self.preset_name.set(default or (names[0] if names else ""))
+
+    def _on_preset_selected(self, _event=None) -> None:
+        name = self.preset_name.get().strip()
+        if name:
+            self._load_preset(name)
+
+    def _load_preset(self, name: str, quiet: bool = False) -> None:
+        settings = self.preset_manager.get_settings(name)
+        if not settings:
+            if not quiet:
+                messagebox.showwarning("Preset", f"Preset '{name}' was not found.")
+            return
+        self._pending_preset = dict(settings)
+        warnings = self.preset_manager.apply_to_controller(self)
+        self.preset_name.set(name)
+        self._rebuild_overlay_rows()
+        self._sync_preset_ui()
+        self._color_changed()
+        self._crop_slider_changed()
+        self._refresh_preview()
+        for warning in warnings:
+            self._log(f"⚠️ Preset: {warning}")
+        if not quiet:
+            self._log(f"📋 Preset loaded: {name}")
+            self.status.set(f"PRESET: {name}")
+
+    def _save_preset(self) -> None:
+        name = simpledialog.askstring("Save Preset", "Preset name:", initialvalue=self.preset_name.get(), parent=self)
+        if name is None:
+            return
+        clean = " ".join(str(name).split()).strip()[:50]
+        if not clean:
+            return
+        existing = self.preset_manager.find_preset(clean)
+        if existing:
+            if self.preset_manager.is_factory(existing):
+                messagebox.showerror("Preset", f"'{existing}' is a built-in preset — choose another name.")
+                return
+            if not messagebox.askyesno("Preset", f"Overwrite existing preset '{existing}'?"):
+                return
+        try:
+            settings = self.preset_manager.capture_from_controller(self)
+            stored = self.preset_manager.save_preset(clean, settings)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Preset", str(exc))
+            return
+        self._refresh_preset_combo()
+        self.preset_name.set(stored)
+        self._log(f"💾 Preset saved: {stored}")
+        self.status.set(f"PRESET SAVED: {stored}")
+
+    def _delete_preset(self) -> None:
+        name = self.preset_name.get().strip()
+        if not name:
+            return
+        if self.preset_manager.is_factory(name):
+            messagebox.showinfo("Preset", "Built-in factory presets cannot be deleted.")
+            return
+        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+            return
+        if self.preset_manager.delete_preset(name):
+            self._refresh_preset_combo()
+            self._log(f"🗑️ Preset deleted: {name}")
+
+    def _set_default_preset(self) -> None:
+        name = self.preset_name.get().strip()
+        if not name:
+            return
+        self.preset_manager.set_default(name)
+        self._log(f"⭐ Default preset: {name} (auto-loads on app start)")
+        self.status.set(f"DEFAULT: {name}")
+
+    def _sync_preset_ui(self) -> None:
+        """Refresh labels/sliders a preset changed behind Tk's back (spec §3.6)."""
+        try:
+            if hasattr(self, "_voice_volume_scale_var"):
+                self._voice_volume_scale_var.set(float(self.voice_volume.get()))
+                self._voice_volume_changed(self._voice_volume_scale_var.get())
+            if hasattr(self, "edge_speed_value"):
+                self.edge_speed_value.configure(text=_format_edge_rate(self.edge_rate_percent.get()))
+            if hasattr(self, "edge_pitch_value"):
+                self._safe_label(self.edge_pitch_value, _format_edge_pitch(self.edge_pitch_hz.get()))
+            if hasattr(self, "zoom_value_label"):
+                self.zoom_value_label.configure(text=f"{float(self.zoom_factor.get()):.2f}x")
+            if hasattr(self, "title_size_label"):
+                self.title_size_label.configure(text=str(int(self.title_size.get())))
+            if hasattr(self, "extra_size_label"):
+                self.extra_size_label.configure(text=str(int(self.extra_text_size.get())))
+            if hasattr(self, "logo_size_label"):
+                self.logo_size_label.configure(text=f"{float(self.logo_width_frac.get()) * 100:.0f}%")
+            if hasattr(self, "logo_opacity_label"):
+                self.logo_opacity_label.configure(text=f"{float(self.logo_opacity.get()) * 100:.0f}%")
+            if hasattr(self, "extra_opacity_label"):
+                self.extra_opacity_label.configure(text=f"{float(self.extra_text_opacity.get()) * 100:.0f}%")
+            if hasattr(self, "duck_value_label"):
+                self.duck_value_label.configure(text=f"{int(self.duck_volume_percent.get())}%")
+            if hasattr(self, "engine_status"):
+                self._engine_changed()
+        except Exception as exc:  # noqa: BLE001 — a missing optional widget must never break preset load
+            self._log(f"⚠️ Preset UI refresh skipped: {exc}")
+
+    # ---- Viral format buttons (§9.2) ---------------------------------------
+    def _apply_viral_format(self, label: str) -> None:
+        fmt = next((f for name, f in VIRAL_FORMATS if name == label), None)
+        if not fmt:
+            return
+        self.output_ratio.set(fmt["output_ratio"])
+        self.frame_fill.set(self._fill_label(fmt["frame_fill"]))
+        self.quality.set(self._quality_label(fmt["video_quality"]))
+        self.zoom_factor.set(float(fmt["zoom_factor"]))
+        self.mirror_video.set(bool(fmt["mirror_video"]))
+        self._zoom_changed(self.zoom_factor.get())
+        self._refresh_preview()
+        self.status.set(f"FORMAT: {label}")
+        self._log(f"⚡ Viral format applied: {label}")
+
+    # ---- TTS engine (§7.4 / §9.3) -----------------------------------------
+    def _tts_engine_code(self) -> str:
+        label = self.tts_engine_label.get()
+        return next((code for code, text in ENGINE_LABELS.items() if text == label), "edge_tts")
+
+    def _set_tts_engine(self, code: str) -> None:
+        if code not in ENGINE_LABELS:
+            code = "edge_tts"
+        self.tts_engine_label.set(ENGINE_LABELS[code])
+        self._engine_changed()
+
+    def _pitch_changed(self, _value=None) -> None:
+        if hasattr(self, "edge_pitch_value"):
+            self._safe_label(self.edge_pitch_value, _format_edge_pitch(self.edge_pitch_hz.get()))
+        self.cfg["edge_tts_pitch"] = _format_edge_pitch(self.edge_pitch_hz.get())
+
+    def _engine_changed(self) -> None:
+        import importlib.util
+        code = self._tts_engine_code()
+        self.cfg["tts_engine"] = code
+        save_config(self.cfg)
+        has = lambda name: importlib.util.find_spec(name) is not None  # noqa: E731
+        mms = has("transformers") and has("torch")
+        piper = has("piper")
+        key = bool(os.environ.get("ELEVENLABS_API_KEY"))
+        env_path = self.gemini_env.get().strip()
+        if env_path and Path(env_path).is_file():
+            try:
+                from dotenv import dotenv_values
+                key = key or bool(dotenv_values(env_path).get("ELEVENLABS_API_KEY"))
+            except Exception:
+                pass
+        self.engine_status.set(
+            "✅ Edge TTS: Ready  |  "
+            + (f"✅ MMS Myanmar: {'installed' if mms else 'not installed'}  |  " if mms else "⚪ MMS Myanmar: not installed  |  ")
+            + (f"✅ Piper: {'installed' if piper else 'not installed'}  |  " if piper else "")
+            + ("✅ ElevenLabs: key found" if key else "⚪ ElevenLabs: no API key")
+        )
+
+    def _preview_voice(self) -> None:
+        """Generate and play a short sample of the selected voice (§9.3)."""
+        voice = self.edge_voice.get().strip()
+        engine_code = self._tts_engine_code()
+        rate = _format_edge_rate(self.edge_rate_percent.get())
+        pitch = _format_edge_pitch(self.edge_pitch_hz.get())
+        env_file = self.gemini_env.get().strip()
+        direction = self.gemini_direction.get().strip()
+        self._log(f"▶ Generating 3 s voice preview — {voice} / {ENGINE_LABELS.get(engine_code, engine_code)}")
+
+        def work() -> None:
+            try:
+                from core import EdgeTTSEngine
+                from tts_engine import create_tts_engines
+                ffmpeg = _tool_path(self.cfg, "ffmpeg")
+                cache = LOGS_DIR / "voice_preview"
+                cache.mkdir(parents=True, exist_ok=True)
+                if engine_code == "gemini_tts" and voice.startswith("gemini:"):
+                    from gemini_tts import GeminiTTSEngine
+                    chosen = GeminiTTSEngine(ffmpeg=ffmpeg, work_dir=cache / "gemini",
+                                             rate=rate, env_file=env_file, direction=direction,
+                                             log=self._log)
+                else:
+                    if engine_code == "gemini_tts":
+                        self._log("⚠️ Gemini TTS needs a gemini: voice — previewing with Edge TTS.")
+                    edge = EdgeTTSEngine(ffmpeg=ffmpeg, work_dir=cache, rate=rate, pitch=pitch,
+                                         log=self._log, use_ssml=bool(self.edge_tts_ssml.get()))
+                    engines = create_tts_engines(ffmpeg=ffmpeg, work_dir=cache, rate=rate, pitch=pitch,
+                                                 env_file=env_file, direction=direction, log=self._log,
+                                                 edge_engine=edge)
+                    chosen = engines.get(engine_code) or engines.get("edge_tts")
+                if chosen is None:
+                    raise RuntimeError("No TTS engine available on this machine")
+                preview_text = ENGLISH_PREVIEW_TEXT if self._target_code() == "en" else PREVIEW_TEXT
+                wav = Path(chosen.generate_channel99_voice(preview_text, voice))
+                if not wav.is_file():
+                    raise RuntimeError("Preview audio was not produced")
+                try:
+                    import winsound
+                    winsound.PlaySound(str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                except ImportError:
+                    os.startfile(str(wav))
+                self._log("✅ Voice preview playing.")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"⚠️ Voice preview failed: {exc}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- Crop (§5) ---------------------------------------------------------
+    def _crop_values(self) -> dict:
+        return normalize_crop({
+            "enabled": bool(self.crop_enabled.get()),
+            "mode": "manual",
+            "x_percent": self._clampf(self.crop_x.get()),
+            "y_percent": self._clampf(self.crop_y.get()),
+            "width_percent": self._clampf(self.crop_w.get(), 0.02, 1.0),
+            "height_percent": self._clampf(self.crop_h.get(), 0.02, 1.0),
+            "aspect_lock": self.crop_aspect.get(),
+        })
+
+    def _apply_crop_values(self, values: dict) -> None:
+        c = normalize_crop(values)
+        self.crop_enabled.set(bool(c["enabled"]))
+        self.crop_x.set(c["x_percent"])
+        self.crop_y.set(c["y_percent"])
+        self.crop_w.set(c["width_percent"])
+        self.crop_h.set(c["height_percent"])
+        self.crop_aspect.set(c["aspect_lock"])
+        self._crop_slider_changed()
+
+    def _crop_toggled(self) -> None:
+        self._redraw_editor_items()
+        self._log(f"✂️ Crop {'ON' if self.crop_enabled.get() else 'OFF'} — video parts re-render on next run.")
+
+    def _crop_slider_changed(self) -> None:
+        c = self._crop_values()
+        # Keep the crop window inside the frame.
+        x = min(c["x_percent"], max(0.0, 1.0 - c["width_percent"]))
+        y = min(c["y_percent"], max(0.0, 1.0 - c["height_percent"]))
+        if x != c["x_percent"]:
+            self.crop_x.set(x)
+        if y != c["y_percent"]:
+            self.crop_y.set(y)
+        fw, fh = self.source_size if self.source_size[0] else (1920, 1080)
+        self._safe_label(self.crop_dim_label,
+                         f"x={x:.2f} y={y:.2f}  w={c['width_percent']:.2f} h={c['height_percent']:.2f}"
+                         f"  ≈ {int(c['width_percent'] * fw)}×{int(c['height_percent'] * fh)} px")
+        self._redraw_editor_items()
+
+    def _reset_crop(self) -> None:
+        self._apply_crop_values({"enabled": bool(self.crop_enabled.get())})
+        self._log("↩️ Crop reset to full frame")
+
+    def _apply_crop_drag(self, x: float, y: float) -> None:
+        """Crop box drag: move the box or one of its 8 handles (§5.5)."""
+        kind, idx, sfx, sfy, orig = self._crop_drag
+        ox, oy, pw, ph = self._preview_bounds()
+        dx, dy = (x - ox) / pw - sfx, (y - oy) / ph - sfy
+        X, Y, W, H = orig["x_percent"], orig["y_percent"], orig["width_percent"], orig["height_percent"]
+        if kind == "move":
+            X = self._clampf(X + dx, 0.0, max(0.0, 1.0 - W))
+            Y = self._clampf(Y + dy, 0.0, max(0.0, 1.0 - H))
+        else:
+            left, top, right, bottom = X, Y, X + W, Y + H
+            if idx in (0, 3, 5):
+                left = min(right - 0.02, X + dx)
+            if idx in (2, 4, 7):
+                right = max(left + 0.02, X + W + dx)
+            if idx in (0, 1, 2):
+                top = min(bottom - 0.02, Y + dy)
+            if idx in (5, 6, 7):
+                bottom = max(top + 0.02, Y + H + dy)
+            X, Y, W, H = left, top, right - left, bottom - top
+            ratio = ASPECT_LOCKS.get(self.crop_aspect.get())
+            if ratio:
+                fw, fh = self.source_size if self.source_size[0] else (1920, 1080)
+                if (W * fw) / max(1.0, H * fh) > ratio:      # too wide → narrow it
+                    new_w = ratio * H * fh / fw
+                    if idx in (0, 3, 5):
+                        X = right - new_w
+                    W = new_w
+                else:                                          # too tall → shorten it
+                    new_h = W * fw / (ratio * fh)
+                    if idx in (0, 1, 2):
+                        Y = bottom - new_h
+                    H = new_h
+        self.crop_x.set(self._clampf(X, 0.0, 0.98))
+        self.crop_y.set(self._clampf(Y, 0.0, 0.98))
+        self.crop_w.set(self._clampf(W, 0.02, 1.0))
+        self.crop_h.set(self._clampf(H, 0.02, 1.0))
+        self._crop_slider_changed()
+
+    def _auto_detect_crop(self) -> None:
+        src = self.source.get().strip()
+        if not src or not Path(src).is_file():
+            messagebox.showinfo("Auto Crop", "Load a source video first.")
+            return
+        ffmpeg, ffprobe = _tool_path(self.cfg, "ffmpeg"), _tool_path(self.cfg, "ffprobe")
+        self._log("🔍 Auto-detecting black bars (ffmpeg cropdetect)...")
+
+        def work() -> None:
+            try:
+                from crop_detect import detect_black_bars
+                result = detect_black_bars(ffprobe, ffmpeg, src, duration_sample=10.0)
+                self.msgq.put(("crop_detected", result))
+            except Exception as exc:  # noqa: BLE001
+                self.msgq.put(("crop_detected", {"error": str(exc)}))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_crop_detection(self, payload) -> None:
+        """Handle the background cropdetect result (spec §5.4)."""
+        if not isinstance(payload, dict):
+            return
+        if payload.get("error"):
+            self._log(f"⚠️ Auto crop failed: {payload['error']}")
+            messagebox.showwarning("Auto Crop", str(payload["error"]))
+            return
+        if not payload or not all(k in payload for k in
+                                  ("x_percent", "y_percent", "width_percent", "height_percent")):
+            self._log("ℹ️ Auto crop: no black bars detected — keeping the full frame.")
+            messagebox.showinfo("Auto Crop", "No black bars detected. The full frame is kept.")
+            return
+        self.crop_enabled.set(True)
+        self._apply_crop_values({"enabled": True, "mode": "auto", **payload,
+                                 "aspect_lock": self.crop_aspect.get()})
+        self._log(f"✂️ Auto crop applied: x={payload['x_percent']:.2f} y={payload['y_percent']:.2f} "
+                  f"w={payload['width_percent']:.2f} h={payload['height_percent']:.2f}")
+        self.status.set("AUTO CROP READY")
+
+    # ---- Color correction (§6) ---------------------------------------------
+    def _color_values(self) -> dict:
+        return normalize_color({
+            "enabled": bool(self.color_enabled.get()),
+            "brightness": float(self.brightness.get()),
+            "contrast": float(self.contrast.get()),
+            "saturation": float(self.saturation.get()),
+        })
+
+    def _apply_color_values(self, values: dict) -> None:
+        c = normalize_color(values)
+        self.color_enabled.set(bool(c["enabled"]))
+        self.brightness.set(c["brightness"])
+        self.contrast.set(c["contrast"])
+        self.saturation.set(c["saturation"])
+        self._color_changed()
+
+    def _color_changed(self) -> None:
+        self._refresh_preview_later()
+
+    def _reset_color(self) -> None:
+        self._apply_color_values({"enabled": bool(self.color_enabled.get())})
+        self._log("↩️ Color correction reset to defaults")
+
+    def _refresh_preview_later(self) -> None:
+        """Debounce (§6.5): one frame extraction after the slider settles."""
+        job = getattr(self, "_color_preview_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._color_preview_job = self.after(350, self._refresh_preview)
+
+    # ---- Custom image overlays (§4) ----------------------------------------
+    def _add_custom_overlay(self) -> None:
+        if len(self.custom_overlays) >= MAX_CUSTOM_OVERLAYS:
+            messagebox.showinfo("Custom Overlays", f"Maximum {MAX_CUSTOM_OVERLAYS} overlays.")
+            return
+        path = filedialog.askopenfilename(title="Select overlay image",
+                                          filetypes=[("Image", "*.png *.jpg *.jpeg *.webp"), ("All", "*.*")])
+        if not path:
+            return
+        self.custom_overlays.append(normalize_overlay({
+            "id": len(self.custom_overlays) + 1, "path": path,
+            "x_percent": 0.85, "y_percent": 0.05, "width_percent": 0.12, "opacity": 0.90, "enabled": True,
+        }, len(self.custom_overlays) + 1))
+        self.selected_overlay = len(self.custom_overlays) - 1
+        self._rebuild_overlay_rows()
+        self._redraw_editor_items()
+        self._log(f"🖼️ Overlay added: {Path(path).name}")
+
+    def _browse_custom_overlay(self, index: int) -> None:
+        if not (0 <= index < len(self.custom_overlays)):
+            return
+        path = filedialog.askopenfilename(title="Replace overlay image",
+                                          filetypes=[("Image", "*.png *.jpg *.jpeg *.webp"), ("All", "*.*")])
+        if path:
+            self.custom_overlays[index]["path"] = path
+            self._overlay_photo_cache.clear()
+            self._rebuild_overlay_rows()
+            self._redraw_editor_items()
+
+    def _remove_custom_overlay(self, index: int) -> None:
+        if 0 <= index < len(self.custom_overlays):
+            self.custom_overlays.pop(index)
+            self._overlay_photo_cache.clear()
+            self.selected_overlay = None
+            for i, ov in enumerate(self.custom_overlays, 1):
+                ov["id"] = i
+            self._rebuild_overlay_rows()
+            self._redraw_editor_items()
+
+    def _rebuild_overlay_rows(self) -> None:
+        host = getattr(self, "overlays_host", None)
+        if host is None:
+            return
+        for child in host.winfo_children():
+            child.destroy()
+        self._safe_label(self.overlay_count_label, f"{len(self.custom_overlays)} / {MAX_CUSTOM_OVERLAYS}")
+        self._overlay_enabled_vars: list[tk.BooleanVar] = []
+        self._overlay_slider_vars: list[tk.DoubleVar] = []
+        self._overlay_time_vars = []
+        self._overlay_window_labels = []
+        for i, ov in enumerate(self.custom_overlays):
+            frame = ttk.LabelFrame(host, text=f"Image {i+1}: {Path(ov['path']).name or '(none)'}", padding=(5, 3))
+            frame.grid(row=i, column=0, sticky="ew", pady=(0, 5))
+            frame.columnconfigure(1, weight=1)
+            enabled_var = tk.BooleanVar(value=bool(ov["enabled"]))
+            self._overlay_enabled_vars.append(enabled_var)
+            ttk.Checkbutton(frame, text="Enabled", variable=enabled_var,
+                            command=lambda idx=i: self._overlay_toggle(idx)).grid(row=0, column=0, sticky="w")
+            ttk.Button(frame, text="Browse", style="Compact.TButton",
+                       command=lambda idx=i: self._browse_custom_overlay(idx)).grid(row=0, column=1, sticky="e")
+            ttk.Button(frame, text="Remove", style="Compact.TButton",
+                       command=lambda idx=i: self._remove_custom_overlay(idx)).grid(row=0, column=2, padx=(4, 0))
+            for r, (text, key, low, high) in enumerate((
+                    ("Size", "width_percent", 0.02, 1.0), ("Opacity", "opacity", 0.10, 1.0)), start=1):
+                ttk.Label(frame, text=text, width=8).grid(row=r, column=0, sticky="w")
+                value = float(ov[key])
+                value_var = tk.DoubleVar(value=value)
+                self._overlay_slider_vars.append(value_var)
+                value_label = ttk.Label(frame, text=f"{value*100:.0f}%", width=6, anchor="e")
+
+                def on_change(v, idx=i, k=key, lbl=value_label):
+                    self._overlay_slider(idx, k, v)
+                    self._safe_label(lbl, f"{float(v)*100:.0f}%")
+
+                ttk.Scale(frame, from_=low, to=high, orient="horizontal", variable=value_var,
+                          command=on_change).grid(row=r, column=1, sticky="ew", pady=1)
+                value_label.grid(row=r, column=2, padx=(6, 0))
+
+            start_var = tk.StringVar(value=format_time_seconds(ov.get("start_sec", 0.0)))
+            end_var = tk.StringVar(value=format_time_seconds(ov.get("end_sec")))
+            self._overlay_time_vars.append((start_var, end_var))
+            for row, text, var, which in ((3, "Start", start_var, "start"), (4, "End", end_var, "end")):
+                ttk.Label(frame, text=text, width=8).grid(row=row, column=0, sticky="w", pady=(3, 0))
+                entry = ttk.Entry(frame, textvariable=var, width=8)
+                entry.grid(row=row, column=1, sticky="w", pady=(3, 0))
+                entry.bind("<FocusOut>", lambda _e, idx=i, k=which, v=var: self._overlay_time_finish(idx, k, v))
+                entry.bind("<Return>", lambda _e, idx=i, k=which, v=var: self._overlay_time_finish(idx, k, v))
+                ttk.Button(frame, text="Use preview", style="Compact.TButton",
+                           command=lambda idx=i, k=which, v=var: self._overlay_time_from_preview(idx, k, v)
+                           ).grid(row=row, column=2, padx=(4, 0), pady=(3, 0))
+                var.trace_add("write", lambda *_a, idx=i, k=which, v=var: self._overlay_time_changed(idx, k, v))
+            window_label = ttk.Label(frame, text="", style="Muted.TLabel")
+            self._overlay_window_labels.append(window_label)
+            window_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=(3, 0))
+            self._overlay_window_hint(i)
+            ttk.Label(frame, text="Position: drag on preview", style="Muted.TLabel").grid(
+                row=6, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
+    def _overlay_toggle(self, index: int) -> None:
+        if 0 <= index < len(self.custom_overlays) and index < len(self._overlay_enabled_vars):
+            self.custom_overlays[index]["enabled"] = bool(self._overlay_enabled_vars[index].get())
+            self._redraw_editor_items()
+
+    def _overlay_slider(self, index: int, key: str, value) -> None:
+        if 0 <= index < len(self.custom_overlays):
+            self.custom_overlays[index][key] = float(value)
+            self._redraw_editor_items()
+
+    def _overlay_window_hint(self, index: int) -> None:
+        labels = getattr(self, "_overlay_window_labels", [])
+        if not (0 <= index < len(labels)) or not (0 <= index < len(self.custom_overlays)):
+            return
+        ov = self.custom_overlays[index]
+        start = format_time_seconds(ov.get("start_sec", 0.0)) or "0:00"
+        end = format_time_seconds(ov.get("end_sec")) or "end of video"
+        self._safe_label(labels[index], f"Visible {start} → {end} · blank End = whole video")
+
+    def _overlay_time_changed(self, index: int, which: str, var: tk.StringVar) -> None:
+        if not (0 <= index < len(self.custom_overlays)):
+            return
+        raw = str(var.get()).strip()
+        parsed = parse_time_seconds(raw) if raw else (0.0 if which == "start" else None)
+        if raw and parsed is None:
+            self._overlay_window_hint(index)   # keep the last valid value while typing
+            return
+        self.custom_overlays[index]["start_sec" if which == "start" else "end_sec"] = parsed
+        self._overlay_window_hint(index)
+        self._redraw_editor_items()
+
+    def _overlay_time_finish(self, index: int, which: str, var: tk.StringVar) -> None:
+        raw = str(var.get()).strip()
+        if not raw:
+            self._overlay_time_changed(index, which, var)
+            return
+        parsed = parse_time_seconds(raw)
+        if parsed is not None:
+            var.set(format_time_seconds(parsed))
+
+    def _overlay_time_from_preview(self, index: int, which: str, var: tk.StringVar) -> None:
+        var.set(format_time_seconds(self.preview_time.get()))
+
+    def _commit_overlay_times(self) -> None:
+        """Validate and commit the Start/End text fields before a job starts."""
+        for i, ov in enumerate(self.custom_overlays):
+            pair = self._overlay_time_vars[i] if i < len(self._overlay_time_vars) else None
+            start_raw = str(pair[0].get()).strip() if pair else format_time_seconds(ov.get("start_sec", 0.0))
+            end_raw = str(pair[1].get()).strip() if pair else format_time_seconds(ov.get("end_sec"))
+            start = parse_time_seconds(start_raw) if start_raw else 0.0
+            if start is None:
+                raise ValueError(f"Image {i+1} start time must be MM:SS (like 0:05) or seconds.")
+            end = parse_time_seconds(end_raw) if end_raw else None
+            if end_raw and end is None:
+                raise ValueError(f"Image {i+1} end time must be MM:SS (like 0:12) or seconds.")
+            if end is not None and end <= start:
+                raise ValueError(f"Image {i+1} end time must be after its start time.")
+            ov["start_sec"] = float(start)
+            ov["end_sec"] = float(end) if end is not None else None
+
+    def _ducking_values(self) -> dict:
+        return {"enabled": bool(self.ducking_enabled.get()),
+                "duck_volume_percent": int(self.duck_volume_percent.get()),
+                "fade_ms": 200}
+
+    def _apply_ducking_values(self, values: dict) -> None:
+        d = dict(values or {})
+        self.ducking_enabled.set(bool(d.get("enabled", False)))
+        self.duck_volume_percent.set(int(d.get("duck_volume_percent", 30) or 30))
+        self._safe_label(self.duck_value_label, f"{self.duck_volume_percent.get()}%")
+
+    # ---- Batch queue (§10) --------------------------------------------------
+    def _sync_batch_files(self) -> None:
+        self.batch_files = [item.path for item in self.batch_manager.queue]
+        if self.batch_files:
+            self.start_btn.configure(text=f"START BATCH ({len(self.batch_files)})")
+        else:
+            self.start_btn.configure(text="START / RESUME")
+
+    def _refresh_batch_view(self) -> None:
+        tree = getattr(self, "batch_tree", None)
+        if tree is None:
+            return
+        selected = tree.selection()
+        children = tree.get_children()
+        if children:
+            tree.delete(*children)
+        for i, item in enumerate(self.batch_manager.queue):
+            name, status, progress, duration, error = item.row_values()
+            tree.insert("", "end", iid=str(i), values=(f"{i+1}. {name}", status, progress, duration, error))
+        summary = self.batch_manager.get_summary()
+        self._safe_label(self.batch_summary,
+                         f"{summary['total']} queued · ✅ {summary['done']} done · ❌ {summary['failed']} failed"
+                         f" · ⏭️ {summary['skipped']} skipped")
+        if selected:
+            for iid in selected:
+                if tree.exists(iid):
+                    tree.selection_add(iid)
+        self._sync_batch_files()
+
+    def _update_batch_row(self, item) -> None:
+        """Repaint only the active row during progress ticks (keeps the tree smooth)."""
+        tree = getattr(self, "batch_tree", None)
+        if tree is None or item is None:
+            return
+        try:
+            index = self.batch_manager.index_of(item)
+        except ValueError:
+            return
+        iid = str(index)
+        if not tree.exists(iid):
+            return
+        name, status, progress, duration, error = item.row_values()
+        tree.item(iid, values=(f"{index + 1}. {name}", status, progress, duration, error))
+
+    def _batch_selected_index(self) -> int:
+        sel = self.batch_tree.selection()
+        if not sel:
+            return -1
+        try:
+            return int(sel[0])
+        except (ValueError, TypeError):
+            return -1
+
+    def _batch_move_up(self) -> None:
+        idx = self._batch_selected_index()
+        if self.batch_manager.move_up(idx):
+            self._refresh_batch_view()
+            self.batch_tree.selection_set(str(max(0, idx - 1)))
+
+    def _batch_move_down(self) -> None:
+        idx = self._batch_selected_index()
+        if self.batch_manager.move_down(idx):
+            self._refresh_batch_view()
+            self.batch_tree.selection_set(str(idx + 1))
+
+    def _batch_remove(self) -> None:
+        idx = self._batch_selected_index()
+        if idx >= 0:
+            self.batch_manager.remove_item(idx)
+            self._refresh_batch_view()
+
+    def _batch_retry_selected(self) -> None:
+        idx = self._batch_selected_index()
+        item = self.batch_manager.item_at(idx)
+        if item and item.status in ("failed", "skipped", "done"):
+            item.status = "pending"
+            item.progress = 0.0
+            item.error_message = ""
+            item.output_path = None
+            item.duration = 0.0
+            self._refresh_batch_view()
+
+    def _batch_drag_start(self, event) -> None:
+        iid = self.batch_tree.identify_row(event.y)
+        self._batch_drag_iid = iid or None
+
+    def _batch_drag_release(self, event) -> None:
+        source_iid, self._batch_drag_iid = self._batch_drag_iid, None
+        target_iid = self.batch_tree.identify_row(event.y)
+        if not source_iid or not target_iid or source_iid == target_iid:
+            return
+        try:
+            source, target = int(source_iid), int(target_iid)
+        except (TypeError, ValueError):
+            return
+        if self.batch_manager.move_to(source, target):
+            self._refresh_batch_view()
+            self.batch_tree.selection_set(str(target))
+
+    def _batch_preview(self) -> None:
+        item = self.batch_manager.item_at(self._batch_menu_index)
+        if item is not None and item.path.is_file():
+            self._load_source(str(item.path))
+            self.job_display.set(f"Batch preview: {item.path.name}")
+
+    def _batch_retry(self) -> None:
+        count = self.batch_manager.retry_failed()
+        self._refresh_batch_view()
+        self._log(f"🔄 Retry: {count} item(s) put back in the queue")
+
+    def _batch_context_menu(self, event) -> None:
+        iid = self.batch_tree.identify_row(event.y)
+        if not iid:
+            return
+        self.batch_tree.selection_set(iid)
+        self._batch_menu_index = int(iid)
+        try:
+            self.batch_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.batch_menu.grab_release()
+
+    def _batch_open_folder(self) -> None:
+        item = self.batch_manager.item_at(self._batch_menu_index)
+        if item is None:
+            return
+        folder = _job_dir_for(item.path)
+        if folder.is_dir():
+            os.startfile(str(folder))
+        elif item.output_path and item.output_path.parent.is_dir():
+            os.startfile(str(item.output_path.parent))
+        else:
+            messagebox.showinfo("Batch Queue", "No job folder yet for this video.")
+
+    def _skip_completed_changed(self) -> None:
+        self.batch_manager.skip_completed = bool(self.skip_completed.get())
+        self.cfg["batch_skip_completed"] = bool(self.skip_completed.get())
+        save_config(self.cfg)
+
+    # ---- Drag and drop (§9.1) ----------------------------------------------
+    def _on_file_drop(self, event) -> None:
+        try:
+            files = self.tk.splitlist(event.data)
+        except Exception:
+            return
+        videos = [Path(f) for f in files if Path(str(f)).suffix.lower() in BATCH_VIDEO_EXTS]
+        if not videos:
+            return
+        self._clear_batch()
+        self._load_source(str(videos[0]))
+        if len(videos) > 1:
+            self.batch_manager.add_files(videos)
+            self._refresh_batch_view()
+            self._log(f"📂 Drag-and-drop: {len(videos)} video(s) added to batch queue")
+        else:
+            self._log(f"📂 Drag-and-drop: {videos[0].name} loaded")
+
+    # ---- Progress ETA (§9.4) -----------------------------------------------
+    def _update_progress_eta(self, current: int, total: int, elapsed: float) -> str:
+        if current <= 0 or total <= 0 or elapsed <= 0:
+            return "~calculating"
+        rate = elapsed / current
+        remaining = max(0.0, rate * (total - current))
+        mins, secs = divmod(int(remaining), 60)
+        return f"~{mins}m {secs:02d}s remaining · {rate:.1f}s/item"
+
+    # ---- Error suggestions (§9.5) ------------------------------------------
+    @staticmethod
+    def suggest_for_error(message: str) -> str:
+        for needle, hint_text in ERROR_SUGGESTIONS.items():
+            if needle.lower() in str(message).lower():
+                return hint_text
+        return "Check jobs/<job>/run.log for the full child-process log."
+
+    # ================================================================ end V2
 
     def _open_text_editor(self, segment: int | None = None) -> None:
         """Edit Text: read the English line next to its Burmese narration and fix the Burmese by hand."""

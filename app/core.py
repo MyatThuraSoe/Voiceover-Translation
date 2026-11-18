@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from app_paths import app_root
+from filter_chain import build_ducking_filter, build_prefilter, overlay_enable_option
+
 
 LogFn = Callable[[str], None]
 def _noop(_: str) -> None:
@@ -102,7 +105,8 @@ class EdgeTTSEngine:
     )
     _env_lock = threading.Lock()
 
-    def __init__(self, *, ffmpeg: str, work_dir: Path, rate: str = "+0%", pitch: str = "+0Hz", log: LogFn = _noop) -> None:
+    def __init__(self, *, ffmpeg: str, work_dir: Path, rate: str = "+0%", pitch: str = "+0Hz",
+                 log: LogFn = _noop, use_ssml: bool = False) -> None:
         import importlib.util
         if importlib.util.find_spec("edge_tts") is None:
             raise RuntimeError("edge-tts မတွေ့ပါ။ pip install -U edge-tts လုပ်ပြီး ပြန်စမ်းပါ။")
@@ -112,6 +116,7 @@ class EdgeTTSEngine:
         self.rate = str(rate or "+0%").strip()
         self.pitch = str(pitch or "+0Hz").strip()
         self.log = log
+        self.use_ssml = bool(use_ssml)
         self.VOICE_DATABASE: dict[str, dict[str, Any]] = {}
         self._counter = 0
         try:
@@ -121,6 +126,7 @@ class EdgeTTSEngine:
             edge_ver = "unknown"
         self.proxy = edge_proxy()
         self.log(f"✅ Edge TTS READY — version={edge_ver}, rate={self.rate}, pitch={self.pitch}"
+                 + (f" | SSML pauses ON" if self.use_ssml else "")
                  + (f" | proxy tries via {self.proxy}" if self.proxy else ""))
 
     @staticmethod
@@ -137,10 +143,32 @@ class EdgeTTSEngine:
             )
         return value
 
-    async def _save_mp3_async(self, text: str, voice: str, mp3: Path, proxy: str | None = None) -> None:
+    def _wrap_ssml(self, text: str, rate: str, pitch: str, pauses: bool = True) -> str:
+        """Wrap text in SSML for more natural speech (spec §7.5).
+
+        Adds <break> pauses at Myanmar sentence boundaries (။ = full stop,
+        ၊ = comma) and English !/? endings, then prosody rate/pitch.
+        """
+        value = str(text or "")
+        if pauses:
+            value = value.replace("။", '။ <break time="400ms"/>')
+            value = value.replace("၊", '၊ <break time="200ms"/>')
+            value = value.replace("!", '! <break time="500ms"/>')
+            value = value.replace("?", '? <break time="500ms"/>')
+        return (
+            '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="my-MM">'
+            f'<prosody rate="{rate}" pitch="{pitch}">'
+            f'{value}'
+            '</prosody>'
+            '</speak>'
+        )
+
+    async def _save_mp3_async(self, text: str, voice: str, mp3: Path, proxy: str | None = None,
+                              ssml: bool = False) -> None:
         import edge_tts
+        payload = self._wrap_ssml(text, self.rate, self.pitch) if ssml else text
         communicate = edge_tts.Communicate(
-            text,
+            payload,
             voice=str(voice),
             rate=self.rate,
             pitch=self.pitch,
@@ -148,7 +176,7 @@ class EdgeTTSEngine:
         )
         await communicate.save(str(mp3))
 
-    def _synthesize_once(self, text: str, voice: str, mp3: Path, *, direct: bool) -> None:
+    def _synthesize_once(self, text: str, voice: str, mp3: Path, *, direct: bool, ssml: bool = False) -> None:
         # edge_tts/aiohttp respects environment/system proxy settings. Some
         # setups need a proxy for Gemini while Edge TTS succeeds only direct.
         with self._env_lock:
@@ -159,7 +187,7 @@ class EdgeTTSEngine:
                         os.environ.pop(key, None)
                     os.environ["NO_PROXY"] = "*"
                     os.environ["no_proxy"] = "*"
-                asyncio.run(self._save_mp3_async(text, voice, mp3, None if direct else self.proxy))
+                asyncio.run(self._save_mp3_async(text, voice, mp3, None if direct else self.proxy, ssml=ssml))
             finally:
                 for key, old_value in backup.items():
                     if old_value is None:
@@ -177,24 +205,27 @@ class EdgeTTSEngine:
         wav.unlink(missing_ok=True)
 
         # The previous 0.5-second retry was too short for transient WebSocket
-        # failures. Try direct twice, then inherited system/proxy twice.
+        # failures. Try direct twice, then inherited system/proxy twice. The
+        # first attempt keeps SSML pauses (when enabled); retries fall back to
+        # plain text in case the service rejects the SSML wrapper.
         routes = [
-            (True, "direct", 0.0),
-            (True, "direct", 1.5),
-            (False, "system/proxy", 2.5),
-            (False, "system/proxy", 5.0),
+            (True, "direct", 0.0, self.use_ssml),
+            (True, "direct", 1.5, False),
+            (False, "system/proxy", 2.5, False),
+            (False, "system/proxy", 5.0, False),
         ]
         errors: list[str] = []
-        for attempt, (direct, route_name, delay) in enumerate(routes, start=1):
+        for attempt, (direct, route_name, delay, use_ssml) in enumerate(routes, start=1):
             if delay:
                 time.sleep(delay)
             mp3.unlink(missing_ok=True)
             try:
                 self.log(
-                    f"🌐 Edge TTS request {attempt}/{len(routes)} — {route_name} route | "
-                    f"voice={voice} | chars={len(clean_text)}"
+                    f"🌐 Edge TTS request {attempt}/{len(routes)} — {route_name} route"
+                    + (" (SSML)" if use_ssml else "")
+                    + f" | voice={voice} | chars={len(clean_text)}"
                 )
-                self._synthesize_once(clean_text, voice, mp3, direct=direct)
+                self._synthesize_once(clean_text, voice, mp3, direct=direct, ssml=use_ssml)
                 if not mp3.is_file() or mp3.stat().st_size < 256:
                     raise RuntimeError("Edge TTS returned no usable MP3 data.")
                 if attempt > 1:
@@ -285,14 +316,18 @@ def segment_basename(seg: dict[str, Any]) -> str:
     return f"S{int(seg['segment_id']):04d}_{_stamp(float(seg['video_start']))}__{_stamp(float(seg['video_end']))}"
 
 
-# English glosses in brackets ("ဂူ (Gu)") are not read by the Burmese voice (2026-10-12).
+# English glosses in brackets ("ဂူ (Gu)") are not read by the Burmese voice (2026-10-12). English narration keeps
+# its own brackets, so a gloss is only dropped from a line that actually contains Myanmar script.
 _GLOSS_RE = re.compile(r"\s*\((?=[^)]*[A-Za-z])[^)]*\)")
 _LATIN_RUN_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019\-]*")
+_MYANMAR_RE = re.compile(r"[\u1000-\u109F\uA9E0-\uA9FF\uAA60-\uAA7F]")
 
 
 def spoken_text(text: str) -> str:
-    """The narration as the voice should say it: Latin-letter glosses in ( ) dropped."""
+    """The narration as the voice should say it: Latin-letter glosses in ( ) dropped from Burmese lines."""
     value = str(text or "")
+    if not _MYANMAR_RE.search(value):
+        return value                      # English (rewrite) narration: brackets are part of the line
     bare = _GLOSS_RE.sub("", value)
     if bare != value and any(ch.isalpha() for ch in bare):
         return re.sub(r"\s+", " ", bare).strip()
@@ -618,12 +653,16 @@ def _distributed_freeze_graph(
     zoom_factor: float,
     max_freeze_hold: float,
     layout: dict[str, Any] | None = None,
+    prefilter: str = "",
 ) -> tuple[str, str, dict[str, float]]:
     """Build a smooth-ish hybrid graph: moderate slow motion + distributed holds.
 
     Rather than one long frozen tail, the remaining hold time is spread over
     several positions inside the source segment.  Each hold clones the nearby
     frame for a short period, then motion continues.
+
+    ``prefilter`` (crop + color, spec §11.1 steps 1-2) runs on [0:v] before the
+    split so every hold frame gets the same treatment.
     """
     import math
 
@@ -639,7 +678,8 @@ def _distributed_freeze_graph(
     chunk_source = source_duration / chunk_count
     filters: list[str] = []
     split_labels = "".join(f"[src{i}]" for i in range(chunk_count))
-    filters.append(f"[0:v]split={chunk_count}{split_labels}")
+    head = f"[0:v]{prefilter}," if prefilter else "[0:v]"
+    filters.append(f"{head}split={chunk_count}{split_labels}")
     out_labels: list[str] = []
     for i in range(chunk_count):
         a = i * chunk_source
@@ -699,9 +739,11 @@ def render_video_part(
     frame_count: int | None = None,
     layout: dict[str, Any] | None = None,
     quality: str = "1080",
+    prefilter: str = "",
 ) -> dict[str, float]:
     """frame_count (when given) locks the part to exactly that many 30 fps frames.
     layout (frame_layout) is the output ratio / fill; None = the original 16:9 fill.
+    prefilter = crop + color-correction filters (chain steps 1-2, before Smart Sync).
 
     Without it each part rounds up to the next whole frame; over ~270 parts that
     added ~6 s, so the picture drifted behind the narration and -shortest cut the end.
@@ -734,6 +776,7 @@ def render_video_part(
             zoom_factor=zoom_factor,
             max_freeze_hold=max_freeze_hold,
             layout=layout,
+            prefilter=prefilter,
         )
         cmd = [
             *common_input,
@@ -745,7 +788,8 @@ def render_video_part(
         ]
     else:
         visual, zoom = _visual_filters(mirror_video, zoom_factor, layout)
-        vf = sync_vf + "," + visual
+        prefix = (prefilter + ",") if prefilter else ""
+        vf = prefix + sync_vf + "," + visual
         if frame_lock:
             # Clone the last frame briefly so -frames:v can always be satisfied.
             vf += ",tpad=stop_mode=clone:stop_duration=0.5"
@@ -789,6 +833,79 @@ def mux_audio(ffmpeg: str, video: Path, audio: Path, output: Path, volume_percen
         raise RuntimeError(f"Final mux failed:\n{result.stderr[-4000:]}")
 
 
+def render_background_audio(ffmpeg: str, source: Path, timing: list[dict[str, Any]],
+                            output: Path, work_dir: Path, log: LogFn = _noop) -> Path | None:
+    """The original video's audio, re-timed to the Smart Sync narration timeline.
+
+    Each timestamp segment becomes one part: atempo matches the picture's speed
+    change, apad+atrim lock the exact narration duration (freeze holds become
+    silence). Parts are concatenated to one 48 kHz stereo WAV. Returns None (and
+    logs) when the source has no usable audio — the render then continues with
+    narration only, exactly like before.
+    """
+    parts: list[Path] = []
+    parts_dir = work_dir / "bg_parts"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    for i, item in enumerate(timing, 1):
+        src_start = float(item["video_start"])
+        src_len = max(0.05, float(item["video_end"]) - src_start)
+        target = max(0.05, float(item["audio_duration"]))
+        factor = target / src_len
+        factor = max(0.5, min(2.0, factor))
+        dst = parts_dir / f"bg_{i:04d}.wav"
+        cmd = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{src_start:.6f}", "-t", f"{src_len:.6f}", "-i", str(source),
+            "-vn", "-af",
+            f"atempo={factor:.6f},apad,atrim=0:{target:.6f},asetpts=PTS-STARTPTS",
+            "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(dst),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if result.returncode != 0 or not dst.is_file() or dst.stat().st_size < 200:
+            log(f"⚠️ Background audio part {i} failed — auto-ducking needs the source's own audio; "
+                "continuing with narration only")
+            return None
+        parts.append(dst)
+    if not parts:
+        return None
+    concat_audio(ffmpeg, parts, output, work_dir)
+    return output
+
+
+def mux_audio_ducked(
+    ffmpeg: str,
+    video: Path,
+    narration: Path,
+    background: Path,
+    output: Path,
+    *,
+    voice_volume_percent: int = 100,
+    duck_filter: str | None = None,
+) -> None:
+    """Final mux with the ducked original audio mixed under the narration (spec §8).
+
+    duck_filter is the build_ducking_filter() volume expression; when None the
+    background keeps a flat (unducked) level.
+    """
+    voice_gain = max(0.05, int(voice_volume_percent)) / 100.0
+    chain = [f"[1:a]volume={voice_gain:.3f},alimiter=limit=0.95:level=disabled[voice]"]
+    if duck_filter:
+        chain.append(f"[2:a]{duck_filter}[bg]")
+    else:
+        chain.append("[2:a]anull[bg]")
+    chain.append("[voice][bg]amix=inputs=2:duration=first:normalize=0[mix]")
+    cmd = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(video), "-i", str(narration), "-i", str(background),
+        "-filter_complex", ";".join(chain),
+        "-map", "0:v:0", "-map", "[mix]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-shortest", "-movflags", "+faststart", str(output),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        raise RuntimeError(f"Final ducked mux failed:\n{result.stderr[-4000:]}")
+
+
 
 def _clamp01(value: Any, default: float = 0.0) -> float:
     try:
@@ -798,10 +915,10 @@ def _clamp01(value: Any, default: float = 0.0) -> float:
 
 
 def _render_title_png(text: str, output: Path, font_path: str, font_size: int, max_width: int = 1500,
-                      scale: float = 1.0) -> Path:
-    """Render Myanmar title through shared Python Chromium renderer."""
+                      scale: float = 1.0, use_font_path: bool = False) -> Path:
+    """Render the title through the shared Python Chromium renderer (Myanmar by default, Latin for English mode)."""
     import sys
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = app_root()
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
@@ -818,6 +935,7 @@ def _render_title_png(text: str, output: Path, font_path: str, font_size: int, m
 
     cfg = {
         "font_path": str(font_path or ""),
+        "use_font_path": bool(use_font_path and font_path),
         "font_size": int(font_size),
         "max_width": int(max_width),
     }
@@ -839,6 +957,8 @@ def _render_extra_text_png(
     background_alpha: float = 0.18,
     max_width: int = 1500,
     scale: float = 1.0,
+    font_path: str = "",
+    use_font_path: bool = False,
 ) -> Path:
     """Render the draggable extra-text overlay with Unicode-safe Myanmar shaping.
 
@@ -848,7 +968,7 @@ def _render_extra_text_png(
     pass cannot reference an editor-only or missing renderer.
     """
     import sys
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = app_root()
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
@@ -866,6 +986,8 @@ def _render_extra_text_png(
     k = min(1.0, max(0.2, float(scale)))           # 720p / 480p quality: every pixel size of the panel shrinks
     size = max(round(18 * k), min(int(font_size), 84))
     cfg = {
+        "font_path": str(font_path or ""),
+        "use_font_path": bool(use_font_path and font_path),
         "font_size": size,
         "min_title_font_size": max(round(16 * k), min(size, int(round(size * 0.62)))),
         "panel_width": max(round(320 * k), min(int(max_width), 1800)),
@@ -914,7 +1036,10 @@ def apply_production_overlays(
     logo_file = Path(logo_path) if logo_path else None
     extra_text = str(overlays.get("extra_text") or "").strip()
     subtitle_track = overlays.get("_subtitle_png_track") or {}
-    if not boxes and not title_text and not extra_text and not subtitle_track and not (logo_file and logo_file.is_file()):
+    custom_overlays = [x for x in (overlays.get("custom_overlays") or []) if isinstance(x, dict)]
+    custom_overlays = [x for x in custom_overlays if x.get("enabled", True) and str(x.get("path") or "").strip()]
+    if (not boxes and not title_text and not extra_text and not subtitle_track
+            and not (logo_file and logo_file.is_file()) and not custom_overlays):
         return input_video
 
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(input_video)]
@@ -925,11 +1050,30 @@ def apply_production_overlays(
     extra_file: Path | None = None
     extra_idx: int | None = None
     subtitle_idx: int | None = None
+    # Custom image overlays (V2 spec §4): each becomes an extra input; missing or
+    # unreadable files are skipped with a warning instead of failing the render.
+    custom_stages: list[tuple[int, dict]] = []
+    for ov in custom_overlays:
+        path = str(ov.get("path") or "")
+        if not path or not Path(path).is_file():
+            log(f"⚠️ Custom overlay skipped (file missing): {path}")
+            continue
+        try:
+            from PIL import Image
+            with Image.open(path) as image:
+                image.verify()
+        except Exception as exc:  # noqa: BLE001 — a broken image must not kill the render
+            log(f"⚠️ Custom overlay skipped (unreadable image): {path} ({exc})")
+            continue
+        custom_stages.append((input_index, dict(ov)))
+        cmd += ["-i", path]
+        input_index += 1
     if title_text:
         title_file = _render_title_png(
             title_text, work_dir / "title_overlay.png",
             str(overlays.get("title_font_path") or ""), max(10, round(int(overlays.get("title_font_size", 54)) * k)),
             max_width=text_width, scale=k,
+            use_font_path=bool(overlays.get("title_use_source_font", False)),
         )
         title_idx = input_index
         cmd += ["-i", str(title_file)]
@@ -945,6 +1089,8 @@ def apply_production_overlays(
             max(10, round(int(overlays.get("extra_text_font_size", 42)) * k)),
             0.18,
             max_width=text_width, scale=k,
+            font_path=str(overlays.get("title_font_path") or ""),
+            use_font_path=bool(overlays.get("title_use_source_font", False)),
         )
         extra_idx = input_index
         cmd += ["-i", str(extra_file)]
@@ -976,6 +1122,25 @@ def apply_production_overlays(
             f"chroma_radius={chroma_blur_strength}:chroma_power=1[{blur}]"
         )
         graph.append(f"[{base}][{blur}]overlay={x}:{y}[{out}]")
+        current = f"[{out}]"
+
+    # Custom image overlays (spec §4.5): scale → opacity → overlay, positions as
+    # percentages of the final frame, clamped so the image stays visible.
+    for i, (idx, ov) in enumerate(custom_stages):
+        x_pct = _clamp01(ov.get("x_percent", 0.85), 0.85)
+        y_pct = _clamp01(ov.get("y_percent", 0.05), 0.05)
+        w_pct = max(0.01, min(1.0, _clamp01(ov.get("width_percent", 0.12), 0.12)))
+        opacity = max(0.05, min(1.0, float(ov.get("opacity", 0.9) if ov.get("opacity") is not None else 0.9)))
+        w_px = max(24, int(round(fw * w_pct)))
+        x_px = min(max(0, int(round(x_pct * fw))), max(0, fw - w_px))
+        y_px = min(max(0, int(round(y_pct * fh))), max(0, fh - 8))
+        out = f"vcov{i}"
+        scale_part = f"[{idx}:v]scale={w_px}:-1"
+        graph.append(f"{scale_part},format=rgba,colorchannelmixer=aa={opacity:.3f}[vcimg{i}]")
+        graph.append(
+            f"{current}[vcimg{i}]overlay=x={x_px}:y={y_px}:eof_action=repeat"
+            f"{overlay_enable_option(ov)}[{out}]"
+        )
         current = f"[{out}]"
 
     if title_idx is not None and title_file is not None:
@@ -1095,7 +1260,16 @@ class EdgeSmartSync:
         log: LogFn = _noop,
         progress: Callable[[int, int, str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        crop: dict[str, Any] | None = None,
+        color_correction: dict[str, Any] | None = None,
+        custom_overlays: list[dict[str, Any]] | None = None,
+        audio_ducking: dict[str, Any] | None = None,
+        tts_engine: str = "edge_tts",
+        edge_tts_ssml: bool = False,
+        target_language: str = "mm",
     ) -> None:
+        from filter_chain import normalize_color, normalize_crop
+
         self.job_dir = Path(job_dir).resolve()
         self.source_path = Path(source_path).resolve() if source_path else (self.job_dir / "source.mp4")
         self.plan_path = Path(plan_path).resolve() if plan_path else (self.job_dir / "smart_sync_plan.json")
@@ -1122,6 +1296,15 @@ class EdgeSmartSync:
         self.log = log
         self.progress = progress or (lambda a, b, c: None)
         self.should_stop = should_stop or (lambda: False)
+        # V2 additions (spec §3-§8): crop, color correction, custom image overlays,
+        # audio auto-ducking, and the selectable TTS engine (with fallback chain).
+        self.crop = normalize_crop(crop)
+        self.color_correction = normalize_color(color_correction)
+        self.custom_overlays = [dict(x) for x in (custom_overlays or []) if isinstance(x, dict)]
+        self.audio_ducking = dict(audio_ducking or {"enabled": False, "duck_volume_percent": 30, "fade_ms": 200})
+        self.tts_engine = str(tts_engine or "edge_tts")
+        self.edge_tts_ssml = bool(edge_tts_ssml)
+        self.target_language = str(target_language or "mm").strip().lower()
 
     def _checkpoint_load(self, paths: PipelinePaths) -> dict[str, Any]:
         if paths.checkpoint.is_file():
@@ -1176,6 +1359,12 @@ class EdgeSmartSync:
         tts_label = "Gemini TTS" if provider == "gemini" else "Edge TTS"
         checkpoint["engine"] = provider
         checkpoint["voice"] = self.voice
+        if self.tts_engine == "gemini_tts" and provider != "gemini":
+            self.log("⚠️ Gemini TTS engine selected, but the voice is not a gemini: voice — "
+                     "Edge TTS will speak. Pick a gemini: voice to use Gemini TTS.")
+        elif provider == "gemini" and self.tts_engine not in ("gemini_tts", ""):
+            self.log(f"⚠️ The gemini: voice always uses Gemini TTS — ignoring the "
+                     f"'{self.tts_engine}' engine selection for this job.")
 
         self.log(f"📁 Job: {self.job_dir}")
         self.log(f"🧩 Timestamp segments: {len(segments)}")
@@ -1187,10 +1376,22 @@ class EdgeSmartSync:
         except Exception as exc:  # only the frame shape depends on it: Original falls back to 16:9
             source_w, source_h = 0, 0
             self.log(f"⚠️ Video size not readable ({exc}); Original ratio falls back to 16:9")
-        layout = frame_layout(self.output_ratio, self.frame_fill, source_w, source_h,
-                              canvas=output_canvas(self.output_ratio, source_w, source_h, self.video_quality))
+        # V2 filter chain steps 1-2 (spec §11.1): crop then color correction run in
+        # front of every Smart Sync part graph; the effective frame after crop drives
+        # the ratio/fill layout so blur bars/padding are computed on what remains.
+        prefilter, (eff_w, eff_h) = build_prefilter(self.crop, self.color_correction, source_w, source_h)
+        if self.crop.get("enabled") and prefilter:
+            self.log(f"✂️ Crop ON: {eff_w}x{eff_h} of {source_w}x{source_h} "
+                     f"(x={self.crop['x_percent']:.2f}, y={self.crop['y_percent']:.2f}, "
+                     f"w={self.crop['width_percent']:.2f}, h={self.crop['height_percent']:.2f})")
+        if self.color_correction.get("enabled"):
+            cc = self.color_correction
+            self.log(f"🎨 Color ON: brightness={cc['brightness']:+.2f} contrast={cc['contrast']:.2f} "
+                     f"saturation={cc['saturation']:.2f}")
+        layout = frame_layout(self.output_ratio, self.frame_fill, eff_w, eff_h,
+                              canvas=output_canvas(self.output_ratio, eff_w, eff_h, self.video_quality))
         self.log(f"🪞 Mirror={'ON' if self.mirror_video else 'OFF'} | Ratio={layout['ratio']} "
-                 f"{layout['cw']}x{layout['ch']} ({layout['fill']}) from {source_w}x{source_h} | Zoom={self.zoom_factor:.3f}x"
+                 f"{layout['cw']}x{layout['ch']} ({layout['fill']}) from {eff_w}x{eff_h} | Zoom={self.zoom_factor:.3f}x"
                  f" | Quality={self.video_quality}p")
 
         if provider == "gemini":
@@ -1200,9 +1401,46 @@ class EdgeSmartSync:
                                      direction=getattr(self, "gemini_direction", ""), log=self.log)
             fingerprint_voice = engine.fingerprint(self.voice)
         else:
-            engine = EdgeTTSEngine(ffmpeg=self.ffmpeg, work_dir=paths.work / "edge_tts_temp",
-                                   rate=self.edge_tts_rate, pitch=self.edge_tts_pitch, log=self.log)
-            fingerprint_voice = self.voice + "|edge-tts-v1|rate=" + self.edge_tts_rate + "|pitch=" + self.edge_tts_pitch
+            edge_options = dict(ffmpeg=self.ffmpeg, work_dir=paths.work / "edge_tts_temp",
+                                rate=self.edge_tts_rate, pitch=self.edge_tts_pitch, log=self.log)
+            if self.edge_tts_ssml:
+                edge_options["use_ssml"] = True
+            try:
+                engine = EdgeTTSEngine(**edge_options)
+            except TypeError as exc:
+                # Older/patch-replaced engines may not know the SSML keyword yet.
+                if "use_ssml" not in edge_options or "use_ssml" not in str(exc):
+                    raise
+                edge_options.pop("use_ssml")
+                engine = EdgeTTSEngine(**edge_options)
+                self.log("⚠️ SSML not supported by this Edge TTS build — plain text mode")
+            fingerprint_voice = (self.voice + "|edge-tts-v1|rate=" + self.edge_tts_rate
+                                 + "|pitch=" + self.edge_tts_pitch)
+            if self.edge_tts_ssml:
+                fingerprint_voice += "|ssml"
+            # V2 (spec §7): selectable engines with automatic fallback. The chain
+            # wraps every engine that exists on this machine; unavailable engines
+            # are skipped, so plain Edge TTS stays the reliable baseline.
+            try:
+                from tts_engine import ENGINE_LABELS, TTSFallbackChain, create_tts_engines
+                engines = create_tts_engines(
+                    ffmpeg=self.ffmpeg, work_dir=paths.work / "tts_cache",
+                    rate=self.edge_tts_rate, pitch=self.edge_tts_pitch,
+                    env_file=getattr(self, "gemini_env_path", ""),
+                    direction=getattr(self, "gemini_direction", ""), log=self.log,
+                    edge_engine=engine,
+                )
+                if engines:
+                    chain = TTSFallbackChain(list(engines.values()), primary=self.tts_engine, log=self.log)
+                    engine = chain
+                    active = chain.active
+                    tts_label = ENGINE_LABELS.get(active, active)
+                    self.log(f"🎙️ TTS engine: {tts_label}"
+                             + (" (fallback chain armed)" if len(engines) > 1 else ""))
+                    if active != "edge_tts":
+                        fingerprint_voice = self.voice + f"|{active}|v2|rate=" + self.edge_tts_rate
+            except Exception as exc:
+                self.log(f"⚠️ TTS engine abstraction unavailable ({exc}) — plain Edge TTS")
         checkpoint["tts_provider"] = provider
 
         timing: list[dict[str, Any]] = []
@@ -1360,6 +1598,9 @@ class EdgeSmartSync:
                 "smooth_freeze": self.smooth_freeze_fallback, "max_freeze_hold": self.max_freeze_hold,
                 "mirror": self.mirror_video, "zoom": self.zoom_factor, "encoder": encoder,
                 "frame": [layout["ratio"], layout["fill"], layout["cw"], layout["ch"]],
+                # Crop/color filters change every part: their string is part of the key
+                # so changing the sliders re-renders (TTS checkpoints are untouched).
+                "prefilter": prefilter,
                 # only a non-1080 quality is part of the key: parts made before the setting are reused
                 **({"quality": self.video_quality} if self.video_quality != "1080" else {}),
             }, sort_keys=True).encode()
@@ -1378,6 +1619,7 @@ class EdgeSmartSync:
                         self.max_video_speed, self.max_video_slow,
                         self.smooth_freeze_fallback, self.max_freeze_hold,
                         frame_count=frame_count, layout=layout, quality=self.video_quality,
+                        prefilter=prefilter,
                     )
                 except Exception:
                     # Only on the first non-reused part, allow global NVENC -> CPU fallback.
@@ -1394,6 +1636,7 @@ class EdgeSmartSync:
                             self.max_video_speed, self.max_video_slow,
                             self.smooth_freeze_fallback, self.max_freeze_hold,
                             frame_count=frame_count, layout=layout, quality=self.video_quality,
+                            prefilter=prefilter,
                         )
                         # Recompute fingerprint with CPU encoder.
                         vfp_raw = json.dumps({
@@ -1406,6 +1649,7 @@ class EdgeSmartSync:
                             "smooth_freeze": self.smooth_freeze_fallback, "max_freeze_hold": self.max_freeze_hold,
                             "mirror": self.mirror_video, "zoom": self.zoom_factor, "encoder": encoder,
                             "frame": [layout["ratio"], layout["fill"], layout["cw"], layout["ch"]],
+                            "prefilter": prefilter,
                             **({"quality": self.video_quality} if self.video_quality != "1080" else {}),
                         }, sort_keys=True).encode()
                         vfp = hashlib.sha256(vfp_raw).hexdigest()
@@ -1434,6 +1678,7 @@ class EdgeSmartSync:
         self._log_sync_check(paths, segments, checkpoint)
         video_for_mux = paths.synced_video_noaudio
         render_overlays = dict(self.overlays)
+        render_overlays["custom_overlays"] = [dict(o) for o in self.custom_overlays]
         subtitle_style = render_overlays.get("subtitles") or {}
         if subtitle_style.get("enabled", False):
             from subtitle_png import prepare
@@ -1441,23 +1686,47 @@ class EdgeSmartSync:
             from subtitle_png import scaled
             track = prepare(out_plan["subtitle_segments"], scaled(subtitle_style, quality_scale(self.video_quality)),
                             (layout["cw"], layout["ch"]),
-                            paths.work / "subtitle_png", final_audio_duration, should_stop=self.should_stop, log=self.log)
+                            paths.work / "subtitle_png", final_audio_duration, should_stop=self.should_stop,
+                            log=self.log, target_language=self.target_language)
             render_overlays["_subtitle_png_track"] = track
             out_plan["subtitle_cues"] = [{k: c[k] for k in ("start", "end", "text")} for c in track["cues"]]
             out_plan["subtitle_srt"] = track["srt"]
             atomic_write_json(paths.plan, out_plan)
-        if render_overlays.get("_subtitle_png_track") or self.overlays.get("blur_boxes") or str(self.overlays.get("title_text") or "").strip() or str(self.overlays.get("logo_path") or "").strip() or str(self.overlays.get("extra_text") or "").strip():
-            self.log("🎨 Production overlay pass — Blur / Title PNG / Logo...")
+        has_custom = [o for o in self.custom_overlays if o.get("enabled", True) and str(o.get("path") or "").strip()]
+        if (render_overlays.get("_subtitle_png_track") or self.overlays.get("blur_boxes")
+                or str(self.overlays.get("title_text") or "").strip()
+                or (bool(self.overlays.get("logo_enabled", False)) and str(self.overlays.get("logo_path") or "").strip())
+                or str(self.overlays.get("extra_text") or "").strip() or has_custom):
+            self.log("🎨 Production overlay pass — Blur / Custom Images / Title PNG / Logo...")
             video_for_mux = apply_production_overlays(
                 self.ffmpeg, paths.synced_video_noaudio, paths.decorated_video_noaudio,
                 render_overlays, encoder, paths.work, self.log, frame_size=(layout["cw"], layout["ch"]),
                 quality=self.video_quality,
             )
-        self.log(f"🎧 {tts_label} audio mux...")
         volume_percent = int(getattr(self, "voice_volume_percent", 100) or 100)
-        if volume_percent != 100:
-            self.log(f"🔊 Voice volume {volume_percent}% applied at final mux (limiter on)")
-        mux_audio(self.ffmpeg, video_for_mux, paths.voice, paths.final, volume_percent)
+        ducking_cfg = dict(self.audio_ducking or {})
+        background_audio: Path | None = None
+        duck_filter: str | None = None
+        if ducking_cfg.get("enabled", False):
+            self.log("🎚️ Audio auto-ducking: re-timing the original audio to the narration timeline...")
+            background_audio = render_background_audio(
+                self.ffmpeg, source, timing, paths.work / "background_audio.wav", paths.work, self.log)
+            if background_audio is not None:
+                duck_volume = max(0.05, min(0.95, float(ducking_cfg.get("duck_volume_percent", 30)) / 100.0))
+                fade_ms = int(ducking_cfg.get("fade_ms", 200))
+                duck_filter = build_ducking_filter(timing, duck_volume, fade_ms)
+                self.log(f"🎚️ Auto-duck ON: background at {int(duck_volume * 100)}% while the narrator speaks"
+                         + (f", {fade_ms} ms fades" if fade_ms else ""))
+        self.log(f"🎧 {tts_label} audio mux...")
+        if background_audio is not None:
+            if volume_percent != 100:
+                self.log(f"🔊 Voice volume {volume_percent}% applied at final mux (limiter on)")
+            mux_audio_ducked(self.ffmpeg, video_for_mux, paths.voice, background_audio, paths.final,
+                             voice_volume_percent=volume_percent, duck_filter=duck_filter)
+        else:
+            if volume_percent != 100:
+                self.log(f"🔊 Voice volume {volume_percent}% applied at final mux (limiter on)")
+            mux_audio(self.ffmpeg, video_for_mux, paths.voice, paths.final, volume_percent)
         final_duration = probe_duration(self.ffprobe, paths.final)
         self.log(f"✅ FINAL READY: {paths.final}")
         self.log(f"⏱️ Final duration: {final_duration:.2f}s")

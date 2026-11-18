@@ -18,3 +18,14 @@ pillow==12.3.0              # overlays, preview
 requests==2.32.3
 playwright==1.62.0          # Myanmar text renderer (Chromium)
 fonttools==4.63.0           # installed Myanmar fonts for the narration subtitles
+tkinterdnd2>=0.4.2         # drag & drop videos onto the app window (spec §9.1)
+
+# Optional local Myanmar voice (MMS TTS, spec §7). NOT installed by default — these
+# pull a multi-GB ML stack. Enable MMS by uncommenting and running:
+#   py -3.12 -m pip install transformers torch scipy
+# The app also downloads the ~350 MB facebook/mms-tts-mya model on first use
+# (see INSTALL_REQUIREMENTS.bat step [5/5] / app/download_mms.py). Without them the
+# app falls back to Edge TTS automatically.
+# transformers>=4.36.0
+# torch>=2.1.0
+# scipy>=1.11.0

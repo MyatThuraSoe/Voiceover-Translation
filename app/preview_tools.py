@@ -40,12 +40,19 @@ def extract_preview_frame(
     ratio: str = "16:9",
     fill: str = "blur",
     source_size: tuple[int, int] = (0, 0),
+    prefilter: str = "",
 ) -> str:
-    """One frame drawn exactly like the render (same flip/zoom/ratio/fill filters), at preview size."""
+    """One frame drawn exactly like the render (same flip/zoom/ratio/fill filters), at preview size.
+
+    ``prefilter`` is the V2 crop + color-correction prefix (spec §11.1 steps 1-2),
+    applied before the visual filters so the preview matches the final render.
+    """
     from core import _visual_filters, frame_layout
 
     layout = frame_layout(ratio, fill, source_size[0], source_size[1], canvas=(width, height))
     vf, _zoom = _visual_filters(mirror, zoom, layout)
+    if prefilter:
+        vf = f"{prefilter},{vf}"
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

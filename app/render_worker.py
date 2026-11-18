@@ -67,6 +67,15 @@ def main() -> int:
             log=log,
             progress=progress,
             should_stop=stop_file.exists,
+            # V2 settings (spec §3-§8): absent keys keep their defaults, so
+            # older job configs still render exactly as before.
+            crop=cfg.get("crop") or None,
+            color_correction=cfg.get("color_correction") or None,
+            custom_overlays=cfg.get("custom_overlays") or None,
+            audio_ducking=cfg.get("audio_ducking") or None,
+            tts_engine=str(cfg.get("tts_engine", "edge_tts") or "edge_tts"),
+            edge_tts_ssml=bool(cfg.get("edge_tts_ssml", False)),
+            target_language=str(cfg.get("target_language", "mm") or "mm"),
         )
         runner.voice_volume_percent = int(cfg.get("voice_volume_percent", 100) or 100)
         runner.short_pauses = bool(cfg.get("short_pauses", False))

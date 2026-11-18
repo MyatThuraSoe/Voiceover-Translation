@@ -52,6 +52,8 @@ def main() -> int:
             gemini_text_model=str(cfg.get("gemini_text_model", "gemini-3.5-flash")),
             source_language=str(cfg.get("source_language", "auto")),
             whisper_model_other=str(cfg.get("whisper_model_other", "medium")),
+            target_language=str(cfg.get("target_language", "mm")),
+            narrator_voice=str(cfg.get("narrator_voice", "")),
         )
         plan_path, plan = planner.build(
             source=Path(cfg["source_path"]),

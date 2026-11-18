@@ -6,9 +6,11 @@ import os
 import shutil
 from pathlib import Path
 
+from app_paths import data_root
+
 DEFAULT_FONT = "Myanmar Text"
 ROOT = Path(__file__).resolve().parent
-CACHE_FILE = ROOT.parent / "logs" / "subtitle_fonts.json"
+CACHE_FILE = data_root() / "logs" / "subtitle_fonts.json"
 _FONT_DIRS = [Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts",
               Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts"]
 
@@ -68,6 +70,17 @@ def myanmar_fonts(refresh: bool = False) -> dict[str, list[str]]:
     except OSError:
         pass
     return families
+
+
+LATIN_FAMILIES = (
+    "Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma", "Trebuchet MS",
+    "Georgia", "Times New Roman", "Impact",
+)
+
+
+def latin_fonts() -> list[str]:
+    """Readable Latin families for English narration subtitles (Chromium draws them from Windows)."""
+    return list(LATIN_FAMILIES)
 
 
 def ass_filter(ass: Path, families: list[str]) -> str:
