@@ -37,6 +37,8 @@ from recap_subtitles import SubtitleControls
 from subtitle_fonts import latin_fonts, myanmar_fonts
 from subtitle_png import geometry as subtitle_geometry, sample as subtitle_sample
 from preset_manager import PresetManager
+from render_variants import (apply_profile_to_settings, missing_artifacts, profile_from_settings,
+                             ratio_key, record_variant, restore_voice_config, variant_filename)
 from batch_manager import BatchManager
 from filter_chain import (ASPECT_LOCKS, MAX_CUSTOM_OVERLAYS, build_prefilter, format_time_seconds,
                           normalize_color, normalize_crop, normalize_overlay, overlay_visible_at,
@@ -299,6 +301,7 @@ class App(_AppBase):
         self.zoom_factor = tk.DoubleVar(value=float(self.cfg.get("zoom_factor", 1.05)))
         saved_ratio = str(self.cfg.get("output_ratio") or "16:9")
         self.output_ratio = tk.StringVar(value=saved_ratio if saved_ratio in OUTPUT_RATIOS else "16:9")
+        self._active_ratio_key = ratio_key(self.output_ratio.get())
         self.frame_fill = tk.StringVar(value=FILL_LABELS.get(str(self.cfg.get("frame_fill") or "blur"), FILL_LABELS["blur"]))
         self.quality = tk.StringVar(value=QUALITY_LABELS[video_quality(self.cfg.get("video_quality"))])
         self.source_size = (0, 0)
@@ -400,6 +403,8 @@ class App(_AppBase):
         default_name = self.preset_manager.get_default_name()
         if default_name:
             self._load_preset(default_name, quiet=True)
+        # Per-ratio text sizes/positions win over the global default preset.
+        self._apply_ratio_profile(self.output_ratio.get(), quiet=True)
         self._refresh_preset_combo()
         self._refresh_batch_view()
         self.after(150, self._pump)
@@ -917,6 +922,9 @@ class App(_AppBase):
         self.start_btn.pack(side="left")
         self.stop_btn = ttk.Button(btns, text="STOP SAFELY", style="Danger.TButton", command=self._stop, state="disabled")
         self.stop_btn.pack(side="left", padx=8)
+        self.rerender_btn = ttk.Button(btns, text="RENDER ANOTHER RATIO", command=self._render_another_ratio,
+                                       state="disabled")
+        self.rerender_btn.pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Open Job Folder", command=self._open_output).pack(side="left")
         ttk.Button(btns, text="Edit Text", command=self._open_text_editor).pack(side="left", padx=(8, 0))
         ttk.Label(btns, textvariable=self.job_display, style="Muted.TLabel").pack(side="left", padx=(12, 0))
@@ -1134,13 +1142,112 @@ class App(_AppBase):
     def _fill_code(self) -> str:
         return next((code for code, label in FILL_LABELS.items() if label == self.frame_fill.get()), "blur")
 
+    @staticmethod
+    def _ratio_label(value: object) -> str:
+        """Accept either a UI ratio label (9:16) or a saved key (9x16)."""
+        text = str(value or "16:9")
+        for candidate in OUTPUT_RATIOS:
+            if ratio_key(candidate) == ratio_key(text):
+                return candidate
+        return text
+
     def _output_canvas(self) -> tuple[int, int]:
         """Size of the final frame for the chosen Ratio (Original follows the loaded video)."""
         return output_canvas(self.output_ratio.get(), *self.source_size)
 
     def _frame_changed(self) -> None:
+        # Save what the user just adjusted for the old ratio, then restore the
+        # saved text sizes/positions for the newly selected ratio.
+        previous = self._active_ratio_key
+        self._save_ratio_profile(previous)
+        self._active_ratio_key = ratio_key(self.output_ratio.get())
+        self._apply_ratio_profile(self.output_ratio.get(), quiet=True)
         self._redraw_editor_items()
         self._refresh_preview()
+
+    def _capture_ratio_profile(self, ratio: str | None = None) -> dict:
+        """Current visual settings, tagged with ``ratio``, without validating a job."""
+        try:
+            settings = self.preset_manager.capture_from_controller(self)
+        except Exception:
+            settings = {
+                "output_ratio": self.output_ratio.get(),
+                "frame_fill": self._fill_code(),
+                "video_quality": self._quality_code(),
+                "title_size": int(self.title_size.get()),
+                "extra_text_size": int(self.extra_text_size.get()),
+                "subtitles": self.subtitle_controls.values(),
+            }
+        if ratio:
+            settings["output_ratio"] = self._ratio_label(ratio)
+        return profile_from_settings(settings)
+
+    def _save_ratio_profile(self, ratio: str | None = None, settings: dict | None = None) -> None:
+        profile = profile_from_settings(settings) if settings is not None else self._capture_ratio_profile(ratio)
+        key = ratio_key(profile.get("output_ratio") or ratio or self.output_ratio.get())
+        profiles = dict(self.cfg.get("ratio_profiles") or {})
+        profiles[key] = profile
+        self.cfg["ratio_profiles"] = profiles
+        self._active_ratio_key = key
+        save_config(self.cfg)
+
+    def _apply_ratio_profile(self, ratio: str | None = None, quiet: bool = False) -> bool:
+        """Restore saved title/subtitle/extra-text sizes and positions for a ratio."""
+        wanted = self._ratio_label(ratio or self.output_ratio.get())
+        key = ratio_key(wanted)
+        profiles = self.cfg.get("ratio_profiles") or {}
+        profile = profiles.get(key) or profiles.get(wanted)
+        if not isinstance(profile, dict) or not profile:
+            self._active_ratio_key = key
+            return False
+
+        def set_var(attr: str, value) -> None:
+            try:
+                getattr(self, attr).set(value)
+            except Exception:
+                pass
+
+        if "output_ratio" in profile:
+            set_var("output_ratio", str(profile["output_ratio"]))
+        if "frame_fill" in profile:
+            set_var("frame_fill", self._fill_label(str(profile["frame_fill"])))
+        if "video_quality" in profile:
+            set_var("quality", self._quality_label(str(profile["video_quality"])))
+        for attr in ("zoom_factor", "title_text", "title_size", "extra_text",
+                     "extra_text_size", "extra_text_opacity", "logo_path"):
+            if attr in profile:
+                set_var(attr, profile[attr])
+        for attr in ("mirror_video", "logo_enabled"):
+            if attr in profile:
+                set_var(attr, bool(profile[attr]))
+        for attr, key_name in (("title_pos", "title_position"), ("logo_pos", "logo_position"),
+                               ("extra_text_pos", "extra_text_position")):
+            if key_name in profile and hasattr(self, attr):
+                setattr(self, attr, list(profile[key_name]))
+        if "logo_width_frac" in profile:
+            set_var("logo_width_frac", float(profile["logo_width_frac"]))
+        if "logo_opacity" in profile:
+            set_var("logo_opacity", float(profile["logo_opacity"]))
+        if "crop" in profile and hasattr(self, "_apply_crop_values"):
+            self._apply_crop_values(dict(profile["crop"] or {}))
+        if "color_correction" in profile and hasattr(self, "_apply_color_values"):
+            self._apply_color_values(dict(profile["color_correction"] or {}))
+        if "audio_ducking" in profile and hasattr(self, "_apply_ducking_values"):
+            self._apply_ducking_values(dict(profile["audio_ducking"] or {}))
+        if "custom_overlays" in profile and hasattr(self, "custom_overlays"):
+            self.custom_overlays = [normalize_overlay(o, i + 1) for i, o in
+                                    enumerate((profile["custom_overlays"] or [])[:MAX_CUSTOM_OVERLAYS])]
+            self._rebuild_overlay_rows()
+        if "subtitles" in profile and hasattr(self, "subtitle_controls"):
+            try:
+                self.subtitle_controls.load_values(dict(profile["subtitles"] or {}))
+            except Exception:
+                pass
+        self._sync_preset_ui()
+        self._active_ratio_key = key
+        if not quiet:
+            self._log(f"🎚️ Ratio {wanted}: saved text sizes / positions restored")
+        return True
 
     def _preview_bounds(self) -> tuple[int, int, int, int]:
         """Largest output-shaped frame (Ratio) that fits the canvas: (x offset, y offset, width, height).
@@ -1735,6 +1842,11 @@ class App(_AppBase):
                 except Exception as exc:
                     self._log(f"⚠️ Editor layout resume error: {exc}")
             self.job_display.set(f"Job: {job.name}")
+            ready = not missing_artifacts(job) and _job_final_output(job) is not None
+            if hasattr(self, "rerender_btn"):
+                self.rerender_btn.configure(state="normal" if ready else "disabled")
+            if ready:
+                self._apply_ratio_profile(self.output_ratio.get(), quiet=True)
             try:
                 ffprobe = _tool_path(self.cfg, "ffprobe")
                 self.preview_duration = preview_probe_duration(ffprobe, p)
@@ -1786,6 +1898,7 @@ class App(_AppBase):
         self.cfg["tts_engine"] = str(settings.get("tts_engine") or self._tts_engine_code())
         self.cfg["edge_tts_ssml"] = bool(settings.get("edge_tts_ssml", self.edge_tts_ssml.get()))
         self.cfg["preview_seek_seconds"] = float(self.preview_time.get())
+        self._save_ratio_profile(settings["output_ratio"], settings)
         save_config(self.cfg)
 
     def _capture_settings(self) -> dict:
@@ -2108,9 +2221,83 @@ class App(_AppBase):
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
 
+    def _render_another_ratio(self) -> None:
+        """Render the current job again in another ratio, reusing plan + voice."""
+        if self.worker and self.worker.is_alive():
+            return
+        try:
+            source = Path(self.source.get().strip()).resolve()
+            if not source.is_file():
+                raise ValueError("Source video ကိုရွေးပါ။")
+            job_dir = _job_dir_for(source)
+            missing = missing_artifacts(job_dir)
+            if missing:
+                raise ValueError(
+                    "This job has no finished script / voice yet.\n"
+                    "Run START / RESUME once, then use Render Another Ratio.\n\nMissing: "
+                    + ", ".join(missing)
+                )
+            if _job_final_output(job_dir) is None:
+                raise ValueError("Run START / RESUME once before rendering another ratio.")
+            settings = self._capture_settings()
+            # The saved voice settings win: a changed voice/rate/engine would force
+            # new TTS, which this path is explicitly not allowed to do.
+            settings = restore_voice_config(job_dir, settings)
+            self._save_cfg(settings)
+        except Exception as exc:
+            messagebox.showerror("Render Another Ratio", str(exc))
+            return
+
+        self.stop_event.clear()
+        self._running(True)
+        self.logbox.delete("1.0", "end")
+        self.progress["value"] = 0
+        self._progress_started_at = time.monotonic()
+        self.status.set("RENDERING RATIO")
+        self.stage.set("Reusing script + voice")
+        ratio = str(settings.get("output_ratio") or "16:9")
+        self._log(f"🔁 Render Another Ratio: {ratio} — script, timeline and voice are already saved.")
+        self._log("   Planner / Gemini / Whisper: SKIPPED · Edge TTS: SKIPPED · only video composition runs.")
+        ffmpeg = _tool_path(self.cfg, "ffmpeg")
+        ffprobe = _tool_path(self.cfg, "ffprobe")
+        cfg_values = {
+            "translation_batch_max_items": int(self.cfg.get("translation_batch_max_items", 40)),
+            "story_context_batch_max_items": int(self.cfg.get("story_context_batch_max_items", 80)),
+            "context_overlap": int(self.cfg.get("context_overlap", 6)),
+            "lookahead": int(self.cfg.get("lookahead", 6)),
+            "translation_audit": bool(self.cfg.get("translation_audit", True)),
+            "atomic_max_duration": float(self.cfg.get("atomic_max_duration", 5.6)),
+            "atomic_target_duration": float(self.cfg.get("atomic_target_duration", 4.2)),
+            "gemini_request_timeout_seconds": int(self.cfg.get("gemini_request_timeout_seconds", 120)),
+            "gemini_text_model": str(self.cfg.get("gemini_text_model", "gemini-3.5-flash")),
+            "whisper_model_other": str(self.cfg.get("whisper_model_other", "medium")),
+        }
+
+        def worker() -> None:
+            try:
+                final, used_job = self._run_one_job(settings, source, ffmpeg, ffprobe, cfg_values,
+                                                    render_only=True)
+                self.msgq.put(("done", f"Second ratio ready ({ratio}).\n\nOutput:\n{final}\n\n"
+                                       f"Job folder:\n{used_job}\n\n"
+                                       "The script, timeline and voice were reused — no API or TTS call."))
+            except InterruptedError as exc:
+                self._log(str(exc))
+                self.msgq.put(("error", str(exc)))
+            except Exception as exc:
+                self._log(traceback.format_exc())
+                self.msgq.put(("error", str(exc)))
+
+        self.worker = threading.Thread(target=worker, daemon=True)
+        self.worker.start()
+
     def _run_one_job(self, settings: dict, source: Path, ffmpeg: str, ffprobe: str,
-                     cfg_values: dict, batch_mode: bool = False) -> tuple[str, Path]:
-        """Planner + Edge TTS/Smart Sync for one video. Runs on the worker thread (no Tk calls)."""
+                     cfg_values: dict, batch_mode: bool = False, render_only: bool = False) -> tuple[str, Path]:
+        """Planner + Edge TTS/Smart Sync for one video. Runs on the worker thread (no Tk calls).
+
+        ``render_only`` skips the planner child entirely and forbids the render
+        worker from synthesizing voice again: it only recomposes the saved
+        timeline for a different ratio / text size.
+        """
         job_dir = _job_dir_for(source)
         job_dir.mkdir(parents=True, exist_ok=True)
         self.current_job = job_dir
@@ -2137,44 +2324,54 @@ class App(_AppBase):
             pass
         self._log(f"📁 Job folder: {job_dir}")
 
-        planner_cfg = job_dir / "_planner_worker.json"
-        planner_data = {
-            "source_path": str(source),
-            "source_title": settings["source_title"],
-            "job_dir": str(job_dir),
-            "runtime_root": str(ROOT_DIR / "recap_runtime"),
-            "gemini_env_path": settings["gemini_env_path"],
-            "ffprobe_path": ffprobe,
-            "reuse": settings["reuse_transcript_and_plan"],
-            "stop_file": str(stop_file),
-            "source_language": settings.get("source_language", "auto"),
-            "target_language": settings.get("target_language", "mm"),
-            "narrator_voice": settings.get("voice", ""),
-            "whisper_model_other": cfg_values.get("whisper_model_other", "medium"),
-        }
-        for key in (
-            "translation_batch_max_items", "story_context_batch_max_items", "context_overlap",
-            "lookahead", "translation_audit", "atomic_max_duration", "atomic_target_duration",
-            "gemini_request_timeout_seconds", "gemini_text_model",
-        ):
-            planner_data[key] = cfg_values[key]
-        self._write_worker_cfg(planner_cfg, planner_data)
-        planner_result = self._run_child(
-            "planner_worker.py", planner_cfg,
-            "STEP 1 — Transcript + Context + Timestamp Translation",
-        )
-        plan_path = str(planner_result.get("plan_path") or (job_dir / "smart_sync_plan.json"))
+        if render_only:
+            plan_path = str(job_dir / "smart_sync_plan.json")
+            self._log("⏭️ STEP 1 SKIPPED — reusing the saved script, timeline and API/Whisper data.")
+        else:
+            planner_cfg = job_dir / "_planner_worker.json"
+            planner_data = {
+                "source_path": str(source),
+                "source_title": settings["source_title"],
+                "job_dir": str(job_dir),
+                "runtime_root": str(ROOT_DIR / "recap_runtime"),
+                "gemini_env_path": settings["gemini_env_path"],
+                "ffprobe_path": ffprobe,
+                "reuse": settings["reuse_transcript_and_plan"],
+                "stop_file": str(stop_file),
+                "source_language": settings.get("source_language", "auto"),
+                "target_language": settings.get("target_language", "mm"),
+                "narrator_voice": settings.get("voice", ""),
+                "whisper_model_other": cfg_values.get("whisper_model_other", "medium"),
+            }
+            for key in (
+                "translation_batch_max_items", "story_context_batch_max_items", "context_overlap",
+                "lookahead", "translation_audit", "atomic_max_duration", "atomic_target_duration",
+                "gemini_request_timeout_seconds", "gemini_text_model",
+            ):
+                planner_data[key] = cfg_values[key]
+            self._write_worker_cfg(planner_cfg, planner_data)
+            planner_result = self._run_child(
+                "planner_worker.py", planner_cfg,
+                "STEP 1 — Transcript + Context + Timestamp Translation",
+            )
+            plan_path = str(planner_result.get("plan_path") or (job_dir / "smart_sync_plan.json"))
 
         plan_data = json.loads(Path(plan_path).read_text(encoding="utf-8"))
         segment_count = len(normalize_segments(plan_data))
-        self._log(f"🧩 Final plan: {segment_count} segments → Edge TTS")
+        self._log(f"🧩 Final plan: {segment_count} segments → "
+                  + ("saved voice (no TTS)" if render_only else "Edge TTS"))
 
         if stop_file.exists():
             raise InterruptedError("Stopped after planner stage. START / RESUME ပြန်နှိပ်လို့ရပါတယ်။")
 
-        self._log("✅ Transcript/translation complete.")
-        self._log(f"🎙️ Narrator TTS — voice={settings['voice']} | "
-                  f"output={'English (rewrite)' if settings.get('target_language') == 'en' else 'Myanmar'}")
+        if render_only:
+            self._log("✅ Saved script / timeline ready — Gemini / Whisper were not called.")
+            self._log(f"♻️ Reusing narration audio — voice={settings['voice']} | "
+                      f"output={'English (rewrite)' if settings.get('target_language') == 'en' else 'Myanmar'}")
+        else:
+            self._log("✅ Transcript/translation complete.")
+            self._log(f"🎙️ Narrator TTS — voice={settings['voice']} | "
+                      f"output={'English (rewrite)' if settings.get('target_language') == 'en' else 'Myanmar'}")
         time.sleep(0.2)
 
         render_cfg = job_dir / "_render_worker.json"
@@ -2194,6 +2391,7 @@ class App(_AppBase):
             "mirror_video": settings["mirror_video"],
             "zoom_factor": settings["zoom_factor"],
             "render_final_video": settings["render_final_video"],
+            "render_only": bool(render_only),
             "overlays": settings["overlays"],
             "voice_volume_percent": settings["voice_volume_percent"],
             "short_pauses": bool(settings.get("short_pauses", True)),
@@ -2213,12 +2411,18 @@ class App(_AppBase):
             "edge_tts_ssml": bool(settings.get("edge_tts_ssml", False)),
             "target_language": settings.get("target_language", "mm"),
         })
-        result = self._run_child("render_worker.py", render_cfg, "STEP 2 — Narrator TTS + Smart Sync").get("result") or {}
+        stage = ("STEP 2 — Video recompose only (saved voice + timeline)"
+                 if render_only else "STEP 2 — Narrator TTS + Smart Sync")
+        result = self._run_child("render_worker.py", render_cfg, stage).get("result") or {}
         final = result.get("final") or result.get("audio") or str(job_dir)
         folder = str(settings.get("final_output_folder") or "").strip()
+        suffix = "English" if settings.get("target_language") == "en" else "Myanmar"
         if folder and Path(final).is_file():
-            suffix = "English" if settings.get("target_language") == "en" else "Myanmar"
-            target = Path(folder) / f"{source.stem}_{suffix}.mp4"
+            if render_only:
+                name = variant_filename(source.stem, settings.get("output_ratio", "16:9"), suffix)
+                target = Path(folder) / name
+            else:
+                target = Path(folder) / f"{source.stem}_{suffix}.mp4"  # original first-run filename
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(final, target)
             self._log(f"📤 Final video saved to {target}")
@@ -2229,6 +2433,11 @@ class App(_AppBase):
                 shutil.copy2(srt, srt_target)
                 self._log(f"📝 SRT saved to {srt_target}")
             final = str(target)
+        try:
+            variant = record_variant(job_dir, settings, Path(final), source.stem, suffix)
+            self._log(f"🗂️ Ratio {settings.get('output_ratio', '16:9')} saved as {variant}")
+        except Exception as exc:
+            self._log(f"⚠️ Ratio variant metadata not saved: {exc}")
         return str(final), job_dir
 
     def _stop(self) -> None:
@@ -2244,6 +2453,11 @@ class App(_AppBase):
     def _running(self, yes: bool) -> None:
         self.start_btn.configure(state="disabled" if yes else "normal")
         self.stop_btn.configure(state="normal" if yes else "disabled")
+        ready = False
+        if not yes and self.current_job is not None:
+            ready = not missing_artifacts(self.current_job) and _job_final_output(self.current_job) is not None
+        if hasattr(self, "rerender_btn"):
+            self.rerender_btn.configure(state="normal" if ready else "disabled")
 
     # ==================================================================== V2
     # Presets, viral formats, crop, color, custom overlays, ducking, batch,
@@ -2385,6 +2599,7 @@ class App(_AppBase):
         self.zoom_factor.set(float(fmt["zoom_factor"]))
         self.mirror_video.set(bool(fmt["mirror_video"]))
         self._zoom_changed(self.zoom_factor.get())
+        self._save_ratio_profile(self.output_ratio.get())
         self._refresh_preview()
         self.status.set(f"FORMAT: {label}")
         self._log(f"⚡ Viral format applied: {label}")

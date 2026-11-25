@@ -1253,6 +1253,7 @@ class EdgeSmartSync:
         smooth_freeze_fallback: bool = False,
         max_freeze_hold: float = 0.75,
         render_final_video: bool = True,
+        render_only: bool = False,
         output_ratio: str = "16:9",
         frame_fill: str = "blur",
         video_quality: str = "1080",
@@ -1289,7 +1290,10 @@ class EdgeSmartSync:
         self.video_quality = globals()["video_quality"](video_quality)
         self.smooth_freeze_fallback = bool(smooth_freeze_fallback)
         self.max_freeze_hold = max(0.15, min(float(max_freeze_hold), 1.50))
-        self.render_final_video = bool(render_final_video)
+        # Render-only second pass: never synthesize a voice line again. Missing or
+        # changed cache rows are a hard error, not an invitation to call the API/TTS.
+        self.render_only = bool(render_only)
+        self.render_final_video = bool(render_final_video) or self.render_only
         # Short pauses: see trim_edge_silence. Set by render_worker from the UI box.
         self.short_pauses = False
         self.overlays = dict(overlays or {})
@@ -1356,15 +1360,25 @@ class EdgeSmartSync:
         checkpoint.setdefault("audio", {})
         checkpoint.setdefault("video", {})
         provider = "gemini" if self.voice.startswith("gemini:") else "edge_tts"    # gemini_tts.py: one narrator
-        tts_label = "Gemini TTS" if provider == "gemini" else "Edge TTS"
+        if self.render_only:
+            provider = str(checkpoint.get("tts_provider") or provider)
+            tts_label = "Gemini TTS" if provider == "gemini" else "Edge TTS"
+            saved_voice = str(checkpoint.get("voice") or self.voice or "")
+            if saved_voice:
+                self.voice = saved_voice
+            self.log(f"♻️ Render-only pass — reusing the saved script, timeline and {tts_label} audio; "
+                     "no API / Whisper / TTS calls")
+        else:
+            tts_label = "Gemini TTS" if provider == "gemini" else "Edge TTS"
         checkpoint["engine"] = provider
         checkpoint["voice"] = self.voice
-        if self.tts_engine == "gemini_tts" and provider != "gemini":
-            self.log("⚠️ Gemini TTS engine selected, but the voice is not a gemini: voice — "
-                     "Edge TTS will speak. Pick a gemini: voice to use Gemini TTS.")
-        elif provider == "gemini" and self.tts_engine not in ("gemini_tts", ""):
-            self.log(f"⚠️ The gemini: voice always uses Gemini TTS — ignoring the "
-                     f"'{self.tts_engine}' engine selection for this job.")
+        if not self.render_only:
+            if self.tts_engine == "gemini_tts" and provider != "gemini":
+                self.log("⚠️ Gemini TTS engine selected, but the voice is not a gemini: voice — "
+                         "Edge TTS will speak. Pick a gemini: voice to use Gemini TTS.")
+            elif provider == "gemini" and self.tts_engine not in ("gemini_tts", ""):
+                self.log(f"⚠️ The gemini: voice always uses Gemini TTS — ignoring the "
+                         f"'{self.tts_engine}' engine selection for this job.")
 
         self.log(f"📁 Job: {self.job_dir}")
         self.log(f"🧩 Timestamp segments: {len(segments)}")
@@ -1394,53 +1408,54 @@ class EdgeSmartSync:
                  f"{layout['cw']}x{layout['ch']} ({layout['fill']}) from {eff_w}x{eff_h} | Zoom={self.zoom_factor:.3f}x"
                  f" | Quality={self.video_quality}p")
 
-        if provider == "gemini":
-            from gemini_tts import GeminiTTSEngine
-            engine = GeminiTTSEngine(ffmpeg=self.ffmpeg, work_dir=paths.work / "gemini_tts_temp",
-                                     rate=self.edge_tts_rate, env_file=getattr(self, "gemini_env_path", ""),
-                                     direction=getattr(self, "gemini_direction", ""), log=self.log)
-            fingerprint_voice = engine.fingerprint(self.voice)
-        else:
-            edge_options = dict(ffmpeg=self.ffmpeg, work_dir=paths.work / "edge_tts_temp",
-                                rate=self.edge_tts_rate, pitch=self.edge_tts_pitch, log=self.log)
-            if self.edge_tts_ssml:
-                edge_options["use_ssml"] = True
-            try:
-                engine = EdgeTTSEngine(**edge_options)
-            except TypeError as exc:
-                # Older/patch-replaced engines may not know the SSML keyword yet.
-                if "use_ssml" not in edge_options or "use_ssml" not in str(exc):
-                    raise
-                edge_options.pop("use_ssml")
-                engine = EdgeTTSEngine(**edge_options)
-                self.log("⚠️ SSML not supported by this Edge TTS build — plain text mode")
-            fingerprint_voice = (self.voice + "|edge-tts-v1|rate=" + self.edge_tts_rate
-                                 + "|pitch=" + self.edge_tts_pitch)
-            if self.edge_tts_ssml:
-                fingerprint_voice += "|ssml"
-            # V2 (spec §7): selectable engines with automatic fallback. The chain
-            # wraps every engine that exists on this machine; unavailable engines
-            # are skipped, so plain Edge TTS stays the reliable baseline.
-            try:
-                from tts_engine import ENGINE_LABELS, TTSFallbackChain, create_tts_engines
-                engines = create_tts_engines(
-                    ffmpeg=self.ffmpeg, work_dir=paths.work / "tts_cache",
-                    rate=self.edge_tts_rate, pitch=self.edge_tts_pitch,
-                    env_file=getattr(self, "gemini_env_path", ""),
-                    direction=getattr(self, "gemini_direction", ""), log=self.log,
-                    edge_engine=engine,
-                )
-                if engines:
-                    chain = TTSFallbackChain(list(engines.values()), primary=self.tts_engine, log=self.log)
-                    engine = chain
-                    active = chain.active
-                    tts_label = ENGINE_LABELS.get(active, active)
-                    self.log(f"🎙️ TTS engine: {tts_label}"
-                             + (" (fallback chain armed)" if len(engines) > 1 else ""))
-                    if active != "edge_tts":
-                        fingerprint_voice = self.voice + f"|{active}|v2|rate=" + self.edge_tts_rate
-            except Exception as exc:
-                self.log(f"⚠️ TTS engine abstraction unavailable ({exc}) — plain Edge TTS")
+        if not self.render_only:
+            if provider == "gemini":
+                from gemini_tts import GeminiTTSEngine
+                engine = GeminiTTSEngine(ffmpeg=self.ffmpeg, work_dir=paths.work / "gemini_tts_temp",
+                                         rate=self.edge_tts_rate, env_file=getattr(self, "gemini_env_path", ""),
+                                         direction=getattr(self, "gemini_direction", ""), log=self.log)
+                fingerprint_voice = engine.fingerprint(self.voice)
+            else:
+                edge_options = dict(ffmpeg=self.ffmpeg, work_dir=paths.work / "edge_tts_temp",
+                                    rate=self.edge_tts_rate, pitch=self.edge_tts_pitch, log=self.log)
+                if self.edge_tts_ssml:
+                    edge_options["use_ssml"] = True
+                try:
+                    engine = EdgeTTSEngine(**edge_options)
+                except TypeError as exc:
+                    # Older/patch-replaced engines may not know the SSML keyword yet.
+                    if "use_ssml" not in edge_options or "use_ssml" not in str(exc):
+                        raise
+                    edge_options.pop("use_ssml")
+                    engine = EdgeTTSEngine(**edge_options)
+                    self.log("⚠️ SSML not supported by this Edge TTS build — plain text mode")
+                fingerprint_voice = (self.voice + "|edge-tts-v1|rate=" + self.edge_tts_rate
+                                     + "|pitch=" + self.edge_tts_pitch)
+                if self.edge_tts_ssml:
+                    fingerprint_voice += "|ssml"
+                # V2 (spec §7): selectable engines with automatic fallback. The chain
+                # wraps every engine that exists on this machine; unavailable engines
+                # are skipped, so plain Edge TTS stays the reliable baseline.
+                try:
+                    from tts_engine import ENGINE_LABELS, TTSFallbackChain, create_tts_engines
+                    engines = create_tts_engines(
+                        ffmpeg=self.ffmpeg, work_dir=paths.work / "tts_cache",
+                        rate=self.edge_tts_rate, pitch=self.edge_tts_pitch,
+                        env_file=getattr(self, "gemini_env_path", ""),
+                        direction=getattr(self, "gemini_direction", ""), log=self.log,
+                        edge_engine=engine,
+                    )
+                    if engines:
+                        chain = TTSFallbackChain(list(engines.values()), primary=self.tts_engine, log=self.log)
+                        engine = chain
+                        active = chain.active
+                        tts_label = ENGINE_LABELS.get(active, active)
+                        self.log(f"🎙️ TTS engine: {tts_label}"
+                                 + (" (fallback chain armed)" if len(engines) > 1 else ""))
+                        if active != "edge_tts":
+                            fingerprint_voice = self.voice + f"|{active}|v2|rate=" + self.edge_tts_rate
+                except Exception as exc:
+                    self.log(f"⚠️ TTS engine abstraction unavailable ({exc}) — plain Edge TTS")
         checkpoint["tts_provider"] = provider
 
         timing: list[dict[str, Any]] = []
@@ -1456,13 +1471,22 @@ class EdgeSmartSync:
                 raise InterruptedError("STOP requested — လက်ရှိပြီးထားတာတွေ checkpoint ထဲသိမ်းထားပါတယ်။")
             base = segment_basename(seg)
             dst = paths.tts_parts / f"{base}.wav"
-            fp = segment_fingerprint(seg, fingerprint_voice)
+            # In a render-only pass the saved fingerprint is the contract: it must
+            # match the checkpoint exactly, or we refuse to synthesize new audio.
+            fp = (str(checkpoint["audio"].get(base, {}).get("fingerprint") or "")
+                  if self.render_only else segment_fingerprint(seg, fingerprint_voice))
             rec = checkpoint["audio"].get(base, {})
             reusable = rec.get("fingerprint") == fp and dst.is_file() and dst.stat().st_size > 1000
             if reusable:
                 duration = probe_duration(self.ffprobe, dst)
                 self.log(f"♻️ [{idx}/{len(segments)}] {base}.wav reuse ({duration:.2f}s)")
             else:
+                if self.render_only:
+                    raise RuntimeError(
+                        "Render Another Ratio must reuse the generated voice, but a cached line "
+                        f"is missing or was changed: {base}.wav. Run START / RESUME once to "
+                        "prepare the script and narration voice."
+                    )
                 self.progress(idx - 1, len(segments), f"{tts_label} {idx}/{len(segments)}")
                 self.log(f"🗣️ [{idx}/{len(segments)}] {base} generate via {tts_label}")
                 speak = spoken_text(seg["narration"])

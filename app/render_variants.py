@@ -1,0 +1,212 @@
+"""Render-only second passes: saved ratio profiles and job variant metadata.
+
+A first START / RESUME run pays for Whisper + Gemini and for the narration
+voice.  ``Render Another Ratio`` reuses those artifacts: it reads the job's
+plan/audio, swaps only the output canvas and text settings, and writes a new
+video file without calling the API or Edge TTS again.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+STATE_FILE = "render_variants.json"
+
+# Values that can reasonably differ between a 16:9 upload and a 9:16 upload.
+# They are kept per ratio in config.json -> ratio_profiles.
+PROFILE_KEYS = (
+    "output_ratio", "frame_fill", "video_quality", "zoom_factor", "mirror_video",
+    "title_text", "title_size", "title_position",
+    "logo_enabled", "logo_path", "logo_width_frac", "logo_opacity", "logo_position",
+    "extra_text", "extra_text_size", "extra_text_opacity", "extra_text_position",
+    "subtitles", "crop", "color_correction", "custom_overlays", "audio_ducking",
+)
+
+# Worker settings use the older "font_size" names inside their overlays dict.
+OVERLAY_PROFILE_MAP = {
+    "title_font_size": "title_size",
+    "extra_text_font_size": "extra_text_size",
+}
+
+VOICE_CONFIG_KEYS = (
+    "voice", "edge_tts_voice", "edge_tts_rate", "edge_tts_pitch", "tts_engine",
+    "edge_tts_ssml", "target_language", "gemini_direction", "gemini_env_path",
+    "short_pauses", "voice_volume_percent",
+)
+
+
+def ratio_key(ratio: object) -> str:
+    """Stable, filename-safe key: ``9:16`` -> ``9x16``, ``Original`` -> ``Original``."""
+    text = str(ratio or "16:9").strip().replace("/", ":")
+    key = re.sub(r"[^0-9A-Za-z]+", "x", text).strip("x")
+    return key or "16x9"
+
+
+def variant_filename(source_stem: str, ratio: object, suffix: str = "English") -> str:
+    """Name for a ratio-specific copy, e.g. ``video_English_9x16.mp4``."""
+    stem = re.sub(r"[^\w\-]+", "_", str(source_stem or "video"), flags=re.UNICODE).strip("_")
+    safe_suffix = re.sub(r"[^0-9A-Za-z]+", "_", str(suffix or "English")).strip("_") or "English"
+    return f"{stem or 'video'}_{safe_suffix}_{ratio_key(ratio)}.mp4"
+
+
+def profile_from_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Extract the per-ratio visual settings from a controller/worker settings dict."""
+    source = dict(settings or {})
+    overlays = source.get("overlays") or {}
+    if not isinstance(overlays, dict):
+        overlays = {}
+    profile: dict[str, Any] = {}
+    for key in PROFILE_KEYS:
+        if key in source:
+            profile[key] = copy.deepcopy(source[key])
+    for worker_key, profile_key in OVERLAY_PROFILE_MAP.items():
+        if worker_key in overlays:
+            profile[profile_key] = copy.deepcopy(overlays[worker_key])
+    for key in PROFILE_KEYS:
+        if key in overlays and key not in profile:
+            profile[key] = copy.deepcopy(overlays[key])
+    profile["output_ratio"] = str(source.get("output_ratio") or profile.get("output_ratio") or "16:9")
+    return profile
+
+
+def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``settings`` with a saved ratio profile merged in."""
+    merged = copy.deepcopy(settings or {})
+    overlays = merged.setdefault("overlays", {})
+    if not isinstance(overlays, dict):
+        overlays = {}
+        merged["overlays"] = overlays
+    overlay_members = {
+        "title_text", "title_position", "logo_enabled", "logo_path", "logo_width_frac",
+        "logo_opacity", "logo_position", "extra_text", "extra_text_position",
+        "extra_text_opacity", "subtitles", "custom_overlays",
+    }
+    for key in PROFILE_KEYS:
+        if key not in (profile or {}):
+            continue
+        value = copy.deepcopy(profile[key])
+        if key in ("title_size", "extra_text_size"):
+            worker_key = "title_font_size" if key == "title_size" else "extra_text_font_size"
+            overlays[worker_key] = value
+            overlays[key] = value
+        elif key in overlay_members:
+            overlays[key] = value
+            merged[key] = value
+        elif key in overlays:
+            overlays[key] = value
+        else:
+            merged[key] = value
+    if "output_ratio" in (profile or {}):
+        merged["output_ratio"] = str(profile["output_ratio"])
+    return merged
+
+
+def state_path(job_dir: Path) -> Path:
+    return Path(job_dir) / STATE_FILE
+
+
+def load_state(job_dir: Path) -> dict[str, Any]:
+    path = state_path(job_dir)
+    data: Any = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    variants = data.get("variants")
+    data["version"] = 1
+    data["variants"] = variants if isinstance(variants, dict) else {}
+    return data
+
+
+def save_state(job_dir: Path, state: dict[str, Any]) -> Path:
+    path = state_path(Path(job_dir))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def missing_artifacts(job_dir: Path) -> list[str]:
+    """Files that must already exist before a render-only pass can be trusted."""
+    job = Path(job_dir)
+    edge = job / "edge_tts_smart_sync"
+    required = (
+        ("script / timeline", job / "smart_sync_plan.json"),
+        ("voice timeline", edge / "smart_sync_plan_edge_tts.json"),
+        ("generated narration audio", edge / "voice_edge_tts.wav"),
+    )
+    missing: list[str] = []
+    for label, path in required:
+        if not path.is_file() or path.stat().st_size < 1000:
+            missing.append(label)
+    return missing
+
+
+def voice_config(job_dir: Path) -> dict[str, Any]:
+    """Voice/rate/engine used by the first pass, so no setting can force new TTS."""
+    state = load_state(job_dir)
+    saved = state.get("voice")
+    if not isinstance(saved, dict):
+        edge_plan = Path(job_dir) / "edge_tts_smart_sync" / "smart_sync_plan_edge_tts.json"
+        if edge_plan.is_file():
+            try:
+                data = json.loads(edge_plan.read_text(encoding="utf-8"))
+                saved = {"voice": data.get("tts_voice", "")}
+            except Exception:
+                saved = {}
+        else:
+            saved = {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def restore_voice_config(job_dir: Path, settings: dict[str, Any]) -> dict[str, Any]:
+    """Return render settings with the original voice configuration restored."""
+    merged = copy.deepcopy(settings or {})
+    saved = voice_config(job_dir)
+    for key in VOICE_CONFIG_KEYS:
+        if key in saved:
+            merged[key] = copy.deepcopy(saved[key])
+    return merged
+
+
+def record_variant(job_dir: Path, settings: dict[str, Any], final_path: Path,
+                   source_stem: str = "", suffix: str = "") -> Path:
+    """Copy a finished render to a ratio-named file and remember it in the job."""
+    job = Path(job_dir)
+    state = load_state(job)
+    ratio = str((settings or {}).get("output_ratio") or "16:9")
+    key = ratio_key(ratio)
+    label = suffix or ("English" if str((settings or {}).get("target_language") or "mm").lower() == "en" else "Myanmar")
+    stem = source_stem or str(Path(str((settings or {}).get("source") or "video")).stem or "video")
+    final = Path(final_path)
+    variant = final.parent / variant_filename(stem, ratio, label)
+    if final.is_file() and final.resolve() != variant.resolve():
+        shutil.copy2(final, variant)
+
+    saved_voice: dict[str, Any] = {}
+    for item in VOICE_CONFIG_KEYS:
+        if item in (settings or {}):
+            saved_voice[item] = copy.deepcopy(settings[item])
+    if saved_voice:
+        state["voice"] = saved_voice
+    variants = state.setdefault("variants", {})
+    if not isinstance(variants, dict):
+        variants = {}
+        state["variants"] = variants
+    variants[key] = {
+        "ratio": ratio,
+        "output": str(variant),
+        "final": str(final),
+        "suffix": label,
+        "profile": profile_from_settings(settings),
+    }
+    save_state(job, state)
+    return variant

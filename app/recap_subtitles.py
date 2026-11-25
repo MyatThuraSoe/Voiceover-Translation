@@ -82,6 +82,21 @@ class SubtitleControls(ttk.Frame):
         if self.variables["font"].get() not in options:
             self.variables["font"].set(options[0])
 
+    def load_values(self, values) -> None:
+        """Restore a saved subtitle style, including the draggable position."""
+        saved = style(values)
+        self.position = list(saved["position"])
+        for key, var in self.variables.items():
+            if key not in saved:
+                continue
+            if isinstance(var, tk.BooleanVar):
+                var.set(bool(saved[key]))
+            else:
+                var.set(str(saved[key]))
+        self.outline.set("Auto" if saved["outline_width"] < 0 else str(saved["outline_width"]))
+        self.width_percent.set(str(round(saved["width"] * 100)))
+        self.on_change()
+
     def values(self):
         values = {key: var.get() for key, var in self.variables.items()}
         values["outline_width"] = -1 if self.outline.get() == "Auto" else int(self.outline.get())

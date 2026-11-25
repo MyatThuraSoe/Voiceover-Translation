@@ -67,7 +67,7 @@ foreach ($dir in @('jobs', 'logs', 'models', 'userdata')) {
 }
 
 $readme = @'
-RecapUpgrade 2.2.0 - Windows desktop app
+RecapUpgrade 2.3.0 - Windows desktop app
 ======================================
 
 Start:  RecapUpgrade.exe
@@ -115,6 +115,12 @@ Notes
   * Subtitle/title rendering uses Playwright with installed Chrome or Edge.
   * Custom Image Overlays have per-image Start/End times (MM:SS, H:MM:SS or
     seconds; blank End = whole video). "Use preview" fills the current time.
+  * Render Another Ratio reuses the finished job's script, timeline and voice.
+    Choose a new Ratio, adjust text sizes, then click the button: no Gemini /
+    Whisper / TTS call is made. Title / subtitle / extra-text sizes and positions
+    are saved per ratio in config.json -> ratio_profiles.
+  * Ratio-specific copies are kept beside the final video and listed in the
+    job's render_variants.json, so the first output is never overwritten.
   * Uninstalling keeps %LOCALAPPDATA%\RecapUpgrade so your settings survive.
 '@
 Set-Content -LiteralPath (Join-Path $Dist 'README.txt') -Value $readme -Encoding UTF8
