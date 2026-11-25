@@ -727,10 +727,11 @@ class App(_AppBase):
         ttk.Checkbutton(frame_row, text="Generate 2 ratios", variable=self.export_two_ratios,
                         command=self._second_ratio_changed).grid(row=2, column=0, columnspan=2,
                                                                  sticky="w", pady=(8, 0))
-        second_combo = ttk.Combobox(frame_row, textvariable=self.second_output_ratio,
-                                    values=OUTPUT_RATIOS, state="readonly", width=9)
-        second_combo.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
-        second_combo.bind("<<ComboboxSelected>>", lambda _e: self._second_ratio_changed())
+        self.second_ratio_combo = ttk.Combobox(frame_row, textvariable=self.second_output_ratio,
+                                               values=OUTPUT_RATIOS, state="readonly", width=9)
+        self.second_ratio_combo.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        self.second_ratio_combo.bind("<<ComboboxSelected>>", lambda _e: self._second_ratio_changed())
+        self._sync_second_ratio_state()
         ttk.Label(frame_row, style="Muted.TLabel", wraplength=250, justify="left",
                   text="One ratio: START renders once. Two ratios: START renders both; "
                        "the second uses the same script and voice (no extra API/TTS call)."
@@ -1173,7 +1174,18 @@ class App(_AppBase):
     def _update_start_button_label(self) -> None:
         if not hasattr(self, "start_btn"):
             return
-        self.start_btn.configure(text="START + 2 RATIOS" if self.export_two_ratios.get() else "START / RESUME")
+        batch_count = len(getattr(self, "batch_files", []) or [])
+        two = bool(self.export_two_ratios.get())
+        if batch_count:
+            text = f"START BATCH + 2 RATIOS ({batch_count})" if two else f"START BATCH ({batch_count})"
+        else:
+            text = "START + 2 RATIOS" if two else "START / RESUME"
+        self.start_btn.configure(text=text)
+
+    def _sync_second_ratio_state(self) -> None:
+        """The second Ratio selector is only usable in two-ratio mode."""
+        if hasattr(self, "second_ratio_combo"):
+            self.second_ratio_combo.configure(state="readonly" if self.export_two_ratios.get() else "disabled")
 
     def _second_ratio_changed(self) -> None:
         """Keep the two ratio choices distinct and make the flow visible on the button."""
@@ -1185,6 +1197,7 @@ class App(_AppBase):
         self.cfg["export_two_ratios"] = bool(self.export_two_ratios.get())
         self.cfg["second_output_ratio"] = second
         save_config(self.cfg)
+        self._sync_second_ratio_state()
         self._update_start_button_label()
         if self.export_two_ratios.get():
             self._log(f"🎬 Two-ratio job: {primary} (full run) + {second} (saved voice, render-only).")
@@ -3094,10 +3107,7 @@ class App(_AppBase):
     # ---- Batch queue (§10) --------------------------------------------------
     def _sync_batch_files(self) -> None:
         self.batch_files = [item.path for item in self.batch_manager.queue]
-        if self.batch_files:
-            self.start_btn.configure(text=f"START BATCH ({len(self.batch_files)})")
-        else:
-            self.start_btn.configure(text="START / RESUME")
+        self._update_start_button_label()
 
     def _refresh_batch_view(self) -> None:
         tree = getattr(self, "batch_tree", None)
