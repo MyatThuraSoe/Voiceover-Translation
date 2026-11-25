@@ -2,8 +2,8 @@
 # PyInstaller Windows version resource for RecapUpgrade.exe.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 3, 0, 0),
-    prodvers=(2, 3, 0, 0),
+    filevers=(2, 4, 0, 0),
+    prodvers=(2, 4, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'RecapUpgrade'),
             StringStruct(u'FileDescription', u'RecapUpgrade - Myanmar & English Voiceover Studio'),
-            StringStruct(u'FileVersion', u'2.3.0.0'),
+            StringStruct(u'FileVersion', u'2.4.0.0'),
             StringStruct(u'InternalName', u'RecapUpgrade'),
             StringStruct(u'LegalCopyright', u'Copyright (c) RecapUpgrade'),
             StringStruct(u'OriginalFilename', u'RecapUpgrade.exe'),
             StringStruct(u'ProductName', u'RecapUpgrade'),
-            StringStruct(u'ProductVersion', u'2.3.0.0')
+            StringStruct(u'ProductVersion', u'2.4.0.0')
           ]
         )
       ]

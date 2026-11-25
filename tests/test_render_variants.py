@@ -17,8 +17,8 @@ if str(APP) not in sys.path:
 
 import core
 from render_variants import (apply_profile_to_settings, load_state, missing_artifacts,
-                             profile_from_settings, ratio_key, record_variant,
-                             restore_voice_config, variant_filename)
+                             prepare_second_ratio, profile_from_settings, ratio_key,
+                             record_variant, restore_voice_config, variant_filename)
 
 RATE = 24000
 
@@ -62,7 +62,9 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertEqual(merged["output_ratio"], "9:16")
         self.assertEqual(merged["frame_fill"], "crop")
         self.assertEqual(merged["overlays"]["title_font_size"], 72)
+        self.assertEqual(merged["title_size"], 72)
         self.assertEqual(merged["overlays"]["extra_text_font_size"], 58)
+        self.assertEqual(merged["extra_text_size"], 58)
         self.assertEqual(merged["overlays"]["subtitles"]["position"], [0.5, 0.84])
 
     def test_missing_artifacts_and_saved_voice_config(self) -> None:
@@ -97,6 +99,44 @@ class RenderVariantHelpersTests(unittest.TestCase):
             restored = restore_voice_config(job, {"voice": "wrong-voice", "edge_tts_rate": "-30%"})
             self.assertEqual(restored["voice"], "en-GB-RyanNeural")
             self.assertEqual(restored["edge_tts_rate"], "+10%")
+
+    def test_two_ratio_job_prepares_a_different_ratio_with_saved_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            job = Path(td) / "job"
+            edge = job / "edge_tts_smart_sync"
+            edge.mkdir(parents=True)
+            final = edge / "final_edge_tts_smart_sync.mp4"
+            final.write_bytes(b"v" * 8000)
+            first = {
+                "source": job / "source.mp4",
+                "output_ratio": "16:9",
+                "target_language": "en",
+                "voice": "en-GB-RyanNeural",
+                "edge_tts_rate": "+5%",
+                "title_size": 54,
+                "overlays": {"title_font_size": 54},
+            }
+            record_variant(job, first, final, "source", "English")
+
+            profiles = {
+                "9x16": {
+                    "output_ratio": "9:16",
+                    "title_size": 72,
+                    "frame_fill": "crop",
+                    "subtitles": {"size": 60, "position": [0.5, 0.84]},
+                }
+            }
+            # The user left the second selector on 16:9: it must still become 9:16.
+            settings = dict(first)
+            settings["second_output_ratio"] = "16:9"
+            second, ratio = prepare_second_ratio(settings, job, profiles)
+            self.assertEqual(ratio, "9:16")
+            self.assertEqual(second["output_ratio"], "9:16")
+            self.assertEqual(second["title_size"], 72)
+            self.assertEqual(second["overlays"]["title_font_size"], 72)
+            self.assertEqual(second["frame_fill"], "crop")
+            self.assertEqual(second["voice"], "en-GB-RyanNeural")
+            self.assertEqual(second["edge_tts_rate"], "+5%")
 
 
 class RenderOnlyPipelineTests(unittest.TestCase):
@@ -187,7 +227,7 @@ class RenderOnlyPipelineTests(unittest.TestCase):
             parts = sorted((job / "edge_tts_smart_sync" / "tts_parts").glob("*.wav"))
             self.assertTrue(parts)
             parts[0].unlink()
-            with self.assertRaisesRegex(RuntimeError, "Render Another Ratio must reuse"):
+            with self.assertRaisesRegex(RuntimeError, "Render This Ratio must reuse"):
                 self._run(job, source, plan, render_only=True, ratio="9:16")
 
 

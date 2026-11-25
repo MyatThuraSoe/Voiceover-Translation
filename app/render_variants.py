@@ -1,7 +1,7 @@
 """Render-only second passes: saved ratio profiles and job variant metadata.
 
 A first START / RESUME run pays for Whisper + Gemini and for the narration
-voice.  ``Render Another Ratio`` reuses those artifacts: it reads the job's
+voice.  ``Render This Ratio`` (and two-ratio START) reuses those artifacts: it reads the job's
 plan/audio, swaps only the output canvas and text settings, and writes a new
 video file without calling the API or Edge TTS again.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 STATE_FILE = "render_variants.json"
+KNOWN_RATIOS = ("16:9", "9:16", "1:1", "Original")
 
 # Values that can reasonably differ between a 16:9 upload and a 9:16 upload.
 # They are kept per ratio in config.json -> ratio_profiles.
@@ -44,6 +45,15 @@ def ratio_key(ratio: object) -> str:
     text = str(ratio or "16:9").strip().replace("/", ":")
     key = re.sub(r"[^0-9A-Za-z]+", "x", text).strip("x")
     return key or "16x9"
+
+
+def canonical_ratio(value: object, fallback: str = "16:9") -> str:
+    """Return a UI ratio label, accepting saved keys such as ``9x16`` too."""
+    text = str(value or "").strip()
+    for candidate in KNOWN_RATIOS:
+        if ratio_key(candidate) == ratio_key(text or fallback):
+            return candidate
+    return fallback
 
 
 def variant_filename(source_stem: str, ratio: object, suffix: str = "English") -> str:
@@ -93,6 +103,7 @@ def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any])
             worker_key = "title_font_size" if key == "title_size" else "extra_text_font_size"
             overlays[worker_key] = value
             overlays[key] = value
+            merged[key] = value
         elif key in overlay_members:
             overlays[key] = value
             merged[key] = value
@@ -175,6 +186,26 @@ def restore_voice_config(job_dir: Path, settings: dict[str, Any]) -> dict[str, A
         if key in saved:
             merged[key] = copy.deepcopy(saved[key])
     return merged
+
+
+def prepare_second_ratio(settings: dict[str, Any], job_dir: Path,
+                         profiles: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Build the render-only settings for the second ratio of a two-ratio job."""
+    base = dict(settings or {})
+    primary = canonical_ratio(base.get("output_ratio"), "16:9")
+    fallback = "16:9" if primary != "16:9" else "9:16"
+    second = canonical_ratio(base.get("second_output_ratio"), fallback)
+    if second == primary:
+        second = next((item for item in KNOWN_RATIOS if item != primary), fallback)
+
+    merged = dict(base)
+    merged["output_ratio"] = second
+    saved_profiles = profiles if isinstance(profiles, dict) else {}
+    profile = saved_profiles.get(ratio_key(second)) or saved_profiles.get(second)
+    if isinstance(profile, dict) and profile:
+        merged = apply_profile_to_settings(merged, profile)
+    merged["output_ratio"] = second          # never let a legacy profile key win
+    return restore_voice_config(job_dir, merged), second
 
 
 def record_variant(job_dir: Path, settings: dict[str, Any], final_path: Path,

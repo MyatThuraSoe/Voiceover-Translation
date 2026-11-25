@@ -78,14 +78,17 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · S
 | ဘယ်ဘက် | **Source language** (Auto-detect / English / Chinese / Hindi / Korean / …)၊ **Output** (**Myanmar · translate** သို့မဟုတ် **English · rewrite**)၊ **Narrator Voice** (Myanmar ဆို `my-MM-ThihaNeural` / `my-MM-NilarNeural`၊ English ဆို `en-GB-RyanNeural` အစရှိတဲ့ English အသံများ) နဲ့ **Speed** (−50% … +100%) ကို ရွေးပါ။ အောက်က **Run Logs** မှာ အလုပ်လုပ်နေတာတွေ ပြပါတယ်။ |
 | အလယ် | **Preview** — slider နဲ့ `◀ 5s` / `5s ▶` နဲ့ ကြည့်ချင်တဲ့ အချိန်ကို ရွှေ့ပြီး **Refresh Frame** နှိပ်ပါ။ Title၊ Logo၊ Extra text ကို ဆွဲရွှေ့ပြီး နေရာချလို့ရပါတယ်။ Blur box ကို ဆွဲလို့ရပါတယ်။ |
 | ညာဘက် | **Production Tools** — Zoom (1.00–1.25×)၊ Flip (ဘယ်ညာ ပြောင်းပြန်)၊ Voice vol (50–300%)၊ Short pauses၊ **Ratio** (16:9 / 9:16 / 1:1 / Original) နဲ့ **Fill** (Blur background / Black bars / Crop to fill)၊ **+ Draw Blur Box** / Delete Selected၊ Title (စာ၊ အရွယ်)၊ Logo (ဖိုင်၊ အရွယ်၊ အလင်းဖောက်မှု)၊ Extra Text Box။ |
-| အောက်ခြေ | **START / RESUME** — စတယ် (ရပ်ထားတာဆိုရင် ဆက်လုပ်တယ်)။ **STOP SAFELY** — အခု လုပ်နေတဲ့ အဆင့်ပြီးမှ ရပ်ပြီး လုပ်ပြီးသမျှ သိမ်းထားတယ်။ **RENDER ANOTHER RATIO** — ပြီးပြီးသား job ရဲ့ စာသား/အသံ/timeline ကို ပြန်သုံးပြီး အခြား Ratio နဲ့ ထပ်ထုတ်တယ် (API / TTS ပြန်မခေါ်ပါ)။ **Open Job Folder** — ထွက်လာတဲ့ ဖိုင်တွေ ဖွင့်ကြည့်ဖို့။ **Edit Text** — မြန်မာ narration ကို စာကြောင်းလိုက် ပြင်ဖို့ (အောက်မှာ ကြည့်ပါ)။ |
+| အောက်ခြေ | **START / RESUME** (သို့မဟုတ် **Generate 2 ratios** ရွေးထားရင် **START + 2 RATIOS**) — စတယ် (ရပ်ထားတာဆိုရင် ဆက်လုပ်တယ်)။ **STOP SAFELY** — အခု လုပ်နေတဲ့ အဆင့်ပြီးမှ ရပ်ပြီး လုပ်ပြီးသမျှ သိမ်းထားတယ်။ **RENDER THIS RATIO** — ပြီးပြီးသား job ရဲ့ စာသား/အသံ/timeline ကို ပြန်သုံးပြီး ရွေးထားတဲ့ Ratio နဲ့ ထပ်ထုတ်တယ် (API / TTS ပြန်မခေါ်ပါ)။ **Open Job Folder** — ထွက်လာတဲ့ ဖိုင်တွေ ဖွင့်ကြည့်ဖို့။ **Edit Text** — မြန်မာ narration ကို စာကြောင်းလိုက် ပြင်ဖို့ (အောက်မှာ ကြည့်ပါ)။ |
 
 **ထွက်လာတဲ့ ဖိုင်:** `jobs\<video နာမည်>_<code>\edge_tts_smart_sync\final_edge_tts_smart_sync.mp4`
 
-**အခြား Ratio တစ်ခု ထပ်ထုတ်ချင်ရင်:** START / RESUME ပြီးပြီးရင် **RENDER ANOTHER RATIO** ကိုသုံးပါ။
-Ratio ပြောင်းတဲ့အခါ Title / Subtitle / Extra Text ရဲ့ အရွယ်နဲ့ နေရာကို Ratio အလိုက် သီးသန့် မှတ်ထားပါတယ်
-(`config.json` ထဲက `ratio_profiles`)။ ဒီ button က Whisper / Gemini / voice generation ကို လုံးဝ ကျော်ပြီး
-သိမ်းထားတဲ့ စာသား + timeline + အသံကိုပဲ ပြန်သုံးပါတယ်။ ပထမထွက်တဲ့ ဖိုင်ကို မဖျက်ဘဲ Ratio အလိုက်
+**Ratio နှစ်ခု တစ်ခါတည်းထုတ်ချင်ရင်:** Production Tools ထဲက **Generate 2 ratios** ကို tick လုပ်ပြီး
+ဒုတိယ Ratio ကိုရွေးပါ။ START ခလုတ်က **START + 2 RATIOS** ဖြစ်သွားပါမယ်။ ပထမ Ratio ကို ပုံမှန်
+အတိုင်း ပြီးစီးပြီး ဒုတိယ Ratio ကို သိမ်းထားတဲ့ script + timeline + အသံနဲ့ပဲ ပြန်ထုတ်ပေးပါတယ်
+(Whisper / Gemini / TTS ဒုတိယအခေါက် မရှိပါ)။ တစ်ခုတည်းပဲ ထုတ်ချင်ရင် tick ကို ဖြုတ်ထားပါ။
+ပြီးပြီးသား job မှာ အခြား Ratio ထပ်လိုရင် Ratio ပြောင်းပြီး **RENDER THIS RATIO** ကို နှိပ်ပါ။
+Ratio အလိုက် Title / Subtitle / Extra Text အရွယ်နဲ့ နေရာကို သီးသန့် မှတ်ထားပါတယ်
+(`config.json` ထဲက `ratio_profiles`)။ ပထမထွက်တဲ့ ဖိုင်ကို မဖျက်ဘဲ
 `<video>_English_16x9.mp4` / `<video>_English_9x16.mp4` လို့ သီးသန့် သိမ်းပေးပါတယ်။
 
 Job folder ထဲမှာ ကြည့်လို့ရတဲ့ ဖိုင်တွေ:
@@ -319,10 +322,12 @@ long videos into parts.
    **Use preview** to fill the current time. A blank **End** means the image stays for the whole video. Timing is
    shown in the preview and applied to the final render.
 
- 8. **Render Another Ratio** — after a finished job, pick another ratio, adjust the text sizes and click the
-    button. Whisper/Gemini and TTS are skipped entirely: the saved script, timeline and narration audio are
-    reused. Title, subtitle and extra-text size/position are stored per ratio in `config.json`
-    (`ratio_profiles`), and each output is kept as its own `<name>_<language>_<ratio>.mp4`.
+ 8. **One or two ratios** — tick **Generate 2 ratios** and pick the second Ratio; START becomes
+    **START + 2 RATIOS** and renders both in one run. The second output is render-only: Whisper/Gemini and
+    TTS are skipped and the saved script, timeline and narration audio are reused. For an extra ratio later,
+    select it and click **RENDER THIS RATIO**. Title, subtitle and extra-text size/position are stored per
+    ratio in `config.json` (`ratio_profiles`), and each output is kept as its own
+    `<name>_<language>_<ratio>.mp4`.
 
 The output has only the chosen narrator voice (Myanmar or English) — no original audio or music.
 
@@ -362,9 +367,11 @@ Double-click **`RUN.bat`**:
 - **Preview** in the middle: seek, Refresh Frame, drag the title/logo/text, draw blur boxes.
 - **Production Tools** on the right: Zoom, Flip, Voice vol, Short pauses, Ratio + Fill, blur,
   title, logo, extra text.
-- **START / RESUME** — starts or continues; **STOP SAFELY** — stops at a safe point and keeps
-  everything; **RENDER ANOTHER RATIO** — enabled after a finished job, recomposes the saved plan/voice for
-  a new ratio with its own text sizes (no API or TTS call); **Open Job Folder**; **Edit Text** — read each
+- **START / RESUME** — starts or continues. Tick **Generate 2 ratios** and choose the second Ratio to make
+  the button read **START + 2 RATIOS**: the second render reuses the saved script/voice (no API or TTS call).
+  **STOP SAFELY** — stops at a safe point and keeps everything; **RENDER THIS RATIO** — enabled after a
+  finished job, recomposes the saved plan/voice for the currently selected Ratio with its own text sizes;
+  **Open Job Folder**; **Edit Text** — read each
   English line next to its Burmese narration,
   fix the Burmese and Save; START / RESUME then re-voices only the edited lines. When a line gets no
   audio (e.g. English and Burmese mixed), the error names the line and offers to open Edit Text on it.

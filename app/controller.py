@@ -37,7 +37,7 @@ from recap_subtitles import SubtitleControls
 from subtitle_fonts import latin_fonts, myanmar_fonts
 from subtitle_png import geometry as subtitle_geometry, sample as subtitle_sample
 from preset_manager import PresetManager
-from render_variants import (apply_profile_to_settings, missing_artifacts, profile_from_settings,
+from render_variants import (missing_artifacts, prepare_second_ratio, profile_from_settings,
                              ratio_key, record_variant, restore_voice_config, variant_filename)
 from batch_manager import BatchManager
 from filter_chain import (ASPECT_LOCKS, MAX_CUSTOM_OVERLAYS, build_prefilter, format_time_seconds,
@@ -302,6 +302,11 @@ class App(_AppBase):
         saved_ratio = str(self.cfg.get("output_ratio") or "16:9")
         self.output_ratio = tk.StringVar(value=saved_ratio if saved_ratio in OUTPUT_RATIOS else "16:9")
         self._active_ratio_key = ratio_key(self.output_ratio.get())
+        self.export_two_ratios = tk.BooleanVar(value=bool(self.cfg.get("export_two_ratios", False)))
+        saved_second = str(self.cfg.get("second_output_ratio") or "")
+        if saved_second not in OUTPUT_RATIOS:
+            saved_second = "16:9" if self.output_ratio.get() == "9:16" else "9:16"
+        self.second_output_ratio = tk.StringVar(value=saved_second)
         self.frame_fill = tk.StringVar(value=FILL_LABELS.get(str(self.cfg.get("frame_fill") or "blur"), FILL_LABELS["blur"]))
         self.quality = tk.StringVar(value=QUALITY_LABELS[video_quality(self.cfg.get("video_quality"))])
         self.source_size = (0, 0)
@@ -717,6 +722,19 @@ class App(_AppBase):
                                      state="readonly", width=34)
         quality_combo.grid(row=1, column=1, columnspan=3, sticky="ew", pady=(6, 0))
         quality_combo.bind("<<ComboboxSelected>>", lambda _e: self._quality_changed())
+        # Explicit one/two-ratio flow. The second ratio is rendered from the saved
+        # script/voice, so the user never needs to guess what the button will reuse.
+        ttk.Checkbutton(frame_row, text="Generate 2 ratios", variable=self.export_two_ratios,
+                        command=self._second_ratio_changed).grid(row=2, column=0, columnspan=2,
+                                                                 sticky="w", pady=(8, 0))
+        second_combo = ttk.Combobox(frame_row, textvariable=self.second_output_ratio,
+                                    values=OUTPUT_RATIOS, state="readonly", width=9)
+        second_combo.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        second_combo.bind("<<ComboboxSelected>>", lambda _e: self._second_ratio_changed())
+        ttk.Label(frame_row, style="Muted.TLabel", wraplength=250, justify="left",
+                  text="One ratio: START renders once. Two ratios: START renders both; "
+                       "the second uses the same script and voice (no extra API/TTS call)."
+                  ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         section(3, "Blur Watermark Area")
         blur_row = ttk.Frame(tools)
@@ -920,9 +938,10 @@ class App(_AppBase):
         btns.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         self.start_btn = ttk.Button(btns, text="START / RESUME", style="Accent.TButton", command=self._start)
         self.start_btn.pack(side="left")
+        self._update_start_button_label()
         self.stop_btn = ttk.Button(btns, text="STOP SAFELY", style="Danger.TButton", command=self._stop, state="disabled")
         self.stop_btn.pack(side="left", padx=8)
-        self.rerender_btn = ttk.Button(btns, text="RENDER ANOTHER RATIO", command=self._render_another_ratio,
+        self.rerender_btn = ttk.Button(btns, text="RENDER THIS RATIO", command=self._render_another_ratio,
                                        state="disabled")
         self.rerender_btn.pack(side="left", padx=(0, 8))
         ttk.Button(btns, text="Open Job Folder", command=self._open_output).pack(side="left")
@@ -1151,6 +1170,25 @@ class App(_AppBase):
                 return candidate
         return text
 
+    def _update_start_button_label(self) -> None:
+        if not hasattr(self, "start_btn"):
+            return
+        self.start_btn.configure(text="START + 2 RATIOS" if self.export_two_ratios.get() else "START / RESUME")
+
+    def _second_ratio_changed(self) -> None:
+        """Keep the two ratio choices distinct and make the flow visible on the button."""
+        primary = self._ratio_label(self.output_ratio.get())
+        second = self._ratio_label(self.second_output_ratio.get())
+        if second == primary:
+            second = "16:9" if primary != "16:9" else "9:16"
+            self.second_output_ratio.set(second)
+        self.cfg["export_two_ratios"] = bool(self.export_two_ratios.get())
+        self.cfg["second_output_ratio"] = second
+        save_config(self.cfg)
+        self._update_start_button_label()
+        if self.export_two_ratios.get():
+            self._log(f"🎬 Two-ratio job: {primary} (full run) + {second} (saved voice, render-only).")
+
     def _output_canvas(self) -> tuple[int, int]:
         """Size of the final frame for the chosen Ratio (Original follows the loaded video)."""
         return output_canvas(self.output_ratio.get(), *self.source_size)
@@ -1162,6 +1200,8 @@ class App(_AppBase):
         self._save_ratio_profile(previous)
         self._active_ratio_key = ratio_key(self.output_ratio.get())
         self._apply_ratio_profile(self.output_ratio.get(), quiet=True)
+        if self._ratio_label(self.second_output_ratio.get()) == self._ratio_label(self.output_ratio.get()):
+            self._second_ratio_changed()
         self._redraw_editor_items()
         self._refresh_preview()
 
@@ -1878,6 +1918,8 @@ class App(_AppBase):
         self.cfg["voice_volume_percent"] = int(settings.get("voice_volume_percent", 100))
         self.cfg["short_pauses"] = bool(settings.get("short_pauses", True))
         self.cfg["output_ratio"] = settings["output_ratio"]
+        self.cfg["export_two_ratios"] = bool(settings.get("export_two_ratios", self.export_two_ratios.get()))
+        self.cfg["second_output_ratio"] = str(settings.get("second_output_ratio") or self.second_output_ratio.get())
         self.cfg["video_quality"] = settings["video_quality"]
         self.cfg["frame_fill"] = settings["frame_fill"]
         self.cfg["logo_enabled"] = bool(settings["overlays"].get("logo_enabled", False))
@@ -1992,6 +2034,8 @@ class App(_AppBase):
             "voice_volume_percent": int(self.voice_volume.get()),
             "short_pauses": bool(self.short_pauses.get()),
             "output_ratio": self.output_ratio.get() if self.output_ratio.get() in OUTPUT_RATIOS else "16:9",
+            "export_two_ratios": bool(self.export_two_ratios.get()),
+            "second_output_ratio": self._ratio_label(self.second_output_ratio.get()),
             "video_quality": self._quality_code(),
             "frame_fill": self._fill_code() if self._fill_code() in FRAME_FILLS else "blur",
             "zoom_factor": zoom,
@@ -2086,6 +2130,8 @@ class App(_AppBase):
             return
         try:
             settings = self._capture_settings()
+            if settings.get("export_two_ratios") and settings.get("second_output_ratio") == settings.get("output_ratio"):
+                raise ValueError("Two-ratio mode needs a second Ratio different from the main Ratio.")
             self._save_cfg(settings)
         except Exception as exc:
             messagebox.showerror("Setup Error", str(exc))
@@ -2102,7 +2148,13 @@ class App(_AppBase):
         self._progress_started_at = time.monotonic()
         self.status.set("STARTING")
         self.stage.set("Preparing")
-        self._log(f"📦 {self.source_language.get()} → Myanmar · Narrator only · Edge TTS · V2 Smart Sync")
+        output_label = "English (rewrite)" if settings.get("target_language") == "en" else "Myanmar (translate)"
+        self._log(f"📦 {self.source_language.get()} → {output_label} · Narrator only · Edge TTS · V2 Smart Sync")
+        if settings.get("export_two_ratios"):
+            self._log(f"🎬 Mode: TWO ratios — {settings['output_ratio']} first, "
+                      f"{settings['second_output_ratio']} second (script + voice reused, no extra API/TTS).")
+        else:
+            self._log(f"🎬 Mode: ONE ratio — {settings['output_ratio']}.")
         self._log(f"📁 App root: {ROOT_DIR}")
         self._log(f"📁 User data: {DATA_DIR}")
         if batch:
@@ -2129,7 +2181,18 @@ class App(_AppBase):
                 self._active_batch_item = None
                 try:
                     final, job_dir = self._run_one_job(settings, sources[0], ffmpeg, ffprobe, cfg_values)
-                    self.msgq.put(("done", f"ပြီးပါပြီ။\n\nOutput:\n{final}\n\nJob folder:\n{job_dir}"))
+                    if settings.get("export_two_ratios"):
+                        second_settings, second_ratio = self._prepare_second_ratio(settings, job_dir)
+                        second_final, _ = self._run_one_job(second_settings, sources[0], ffmpeg, ffprobe,
+                                                            cfg_values, render_only=True)
+                        message = (f"ပြီးပါပြီ။\n\n"
+                                   f"Main ({settings['output_ratio']}):\n{final}\n\n"
+                                   f"Second ({second_ratio}):\n{second_final}\n\n"
+                                   f"Job folder:\n{job_dir}\n\n"
+                                   "The second ratio reused the script and voice — no extra API or TTS call.")
+                    else:
+                        message = f"ပြီးပါပြီ။\n\nOutput:\n{final}\n\nJob folder:\n{job_dir}"
+                    self.msgq.put(("done", message))
                 except InterruptedError as exc:
                     self._log(str(exc))
                     self.msgq.put(("error", str(exc)))
@@ -2178,10 +2241,16 @@ class App(_AppBase):
                 one["source_title"] = source.stem
                 try:
                     final, _job_dir = self._run_one_job(one, source, ffmpeg, ffprobe, cfg_values, batch_mode=True)
+                    extra = ""
+                    if one.get("export_two_ratios"):
+                        second_settings, second_ratio = self._prepare_second_ratio(one, _job_dir)
+                        second_final, _ = self._run_one_job(second_settings, source, ffmpeg, ffprobe, cfg_values,
+                                                            batch_mode=True, render_only=True)
+                        extra = f" · {second_ratio}: {second_final}"
                     ok.append(source.name)
                     if item is not None:
                         self.batch_manager.mark_done(item, Path(final))
-                    self._log(f"✅ {label} COMPLETE → {final}")
+                    self._log(f"✅ {label} COMPLETE → {final}{extra}")
                 except InterruptedError as exc:
                     self._log(str(exc))
                     stopped = True
@@ -2234,7 +2303,7 @@ class App(_AppBase):
             if missing:
                 raise ValueError(
                     "This job has no finished script / voice yet.\n"
-                    "Run START / RESUME once, then use Render Another Ratio.\n\nMissing: "
+                    "Run START / RESUME once, then use Render This Ratio.\n\nMissing: "
                     + ", ".join(missing)
                 )
             if _job_final_output(job_dir) is None:
@@ -2245,7 +2314,7 @@ class App(_AppBase):
             settings = restore_voice_config(job_dir, settings)
             self._save_cfg(settings)
         except Exception as exc:
-            messagebox.showerror("Render Another Ratio", str(exc))
+            messagebox.showerror("Render This Ratio", str(exc))
             return
 
         self.stop_event.clear()
@@ -2256,7 +2325,7 @@ class App(_AppBase):
         self.status.set("RENDERING RATIO")
         self.stage.set("Reusing script + voice")
         ratio = str(settings.get("output_ratio") or "16:9")
-        self._log(f"🔁 Render Another Ratio: {ratio} — script, timeline and voice are already saved.")
+        self._log(f"🔁 RENDER THIS RATIO: {ratio} — script, timeline and voice are already saved.")
         self._log("   Planner / Gemini / Whisper: SKIPPED · Edge TTS: SKIPPED · only video composition runs.")
         ffmpeg = _tool_path(self.cfg, "ffmpeg")
         ffprobe = _tool_path(self.cfg, "ffprobe")
@@ -2289,6 +2358,12 @@ class App(_AppBase):
 
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
+
+    def _prepare_second_ratio(self, settings: dict, job_dir: Path) -> tuple[dict, str]:
+        """Second-ratio settings: saved per-ratio text sizes + the original voice."""
+        second, ratio = prepare_second_ratio(settings, job_dir, self.cfg.get("ratio_profiles") or {})
+        self._log(f"🎚️ Second ratio {ratio}: text sizes / positions restored from its saved profile.")
+        return second, ratio
 
     def _run_one_job(self, settings: dict, source: Path, ffmpeg: str, ffprobe: str,
                      cfg_values: dict, batch_mode: bool = False, render_only: bool = False) -> tuple[str, Path]:

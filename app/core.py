@@ -1483,7 +1483,7 @@ class EdgeSmartSync:
             else:
                 if self.render_only:
                     raise RuntimeError(
-                        "Render Another Ratio must reuse the generated voice, but a cached line "
+                        "Render This Ratio must reuse the generated voice, but a cached line "
                         f"is missing or was changed: {base}.wav. Run START / RESUME once to "
                         "prepare the script and narration voice."
                     )
