@@ -67,7 +67,7 @@ foreach ($dir in @('jobs', 'logs', 'models', 'userdata')) {
 }
 
 $readme = @'
-RecapUpgrade 2.4.0 - Windows desktop app
+RecapUpgrade 2.4.1 - Windows desktop app
 ======================================
 
 Start:  RecapUpgrade.exe
@@ -119,11 +119,15 @@ Notes
     START / RESUME becomes START + 2 RATIOS: the first output is a full run, the
     second is a render-only copy that reuses the same script, timeline and voice.
     No second Gemini / Whisper / TTS call is made.
+  * EDIT 2ND STYLE temporarily loads the second Ratio into all style controls.
+    Change Title / Subtitle / Extra Text sizes and positions, then click
+    DONE 2ND STYLE to save that Ratio's profile and return to the main Ratio.
   * RENDER THIS RATIO (enabled after a job) does the same for the currently
     selected Ratio. Title / subtitle / extra-text sizes and positions are saved
     per ratio in config.json -> ratio_profiles.
-  * Ratio-specific copies are kept beside the final video and listed in the
-    job's render_variants.json, so the first output is never overwritten.
+  * A two-ratio job writes exactly one file per Ratio, e.g.
+    <video>_English_16x9.mp4 and <video>_English_9x16.mp4; both are listed in the
+    job's render_variants.json. There is no extra unsuffixed duplicate.
   * Uninstalling keeps %LOCALAPPDATA%\RecapUpgrade so your settings survive.
 '@
 Set-Content -LiteralPath (Join-Path $Dist 'README.txt') -Value $readme -Encoding UTF8

@@ -16,7 +16,8 @@ if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
 
 import core
-from render_variants import (apply_profile_to_settings, load_state, missing_artifacts,
+from render_variants import (apply_profile_to_settings, default_profile_for_ratio,
+                             final_output_filename, load_state, missing_artifacts,
                              prepare_second_ratio, profile_from_settings, ratio_key,
                              record_variant, restore_voice_config, variant_filename)
 
@@ -41,6 +42,64 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertEqual(ratio_key("9:16"), "9x16")
         self.assertEqual(ratio_key("Original"), "Original")
         self.assertEqual(variant_filename("my video", "1:1", "English"), "my_video_English_1x1.mp4")
+
+    def test_two_ratio_job_has_one_output_per_ratio(self) -> None:
+        # A two-ratio START names both outputs by ratio; there is no leftover
+        # unsuffixed <name>_English.mp4 next to them.
+        self.assertEqual(final_output_filename("my video", "16:9", "English", two_ratios=True),
+                         "my_video_English_16x9.mp4")
+        self.assertEqual(final_output_filename("my video", "9:16", "English", render_only=True),
+                         "my_video_English_9x16.mp4")
+        # One-ratio jobs keep the original friendly filename.
+        self.assertEqual(final_output_filename("my video", "16:9", "English"),
+                         "my_video_English.mp4")
+
+    def test_ratio_named_final_is_not_copied_again(self) -> None:
+        # _run_one_job names two-ratio outputs by ratio, then record_variant
+        # runs. That second step must not leave an extra 16:9 duplicate.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            job = base / "job"
+            job.mkdir()
+            out = base / "out"
+            out.mkdir()
+            name = final_output_filename("my video", "16:9", "English", two_ratios=True)
+            final = out / name
+            final.write_bytes(b"v" * 8000)
+            settings = {
+                "source": base / "my video.mp4",
+                "output_ratio": "16:9",
+                "target_language": "en",
+                "voice": "en-GB-RyanNeural",
+            }
+            variant = record_variant(job, settings, final, "my video", "English")
+            self.assertEqual(variant.resolve(), final.resolve())
+            self.assertEqual([p.name for p in out.glob("*.mp4")], [name])
+
+    def test_second_ratio_has_its_own_default_style(self) -> None:
+        default = default_profile_for_ratio("9:16")
+        self.assertEqual(default["output_ratio"], "9:16")
+        self.assertEqual(default["frame_fill"], "crop")
+        self.assertEqual(default["title_size"], 64)
+        self.assertEqual(default["subtitles"]["position"], [0.5, 0.80])
+
+        main = {
+            "output_ratio": "16:9",
+            "title_size": 54,
+            "overlays": {
+                "title_font_size": 54,
+                "subtitles": {"size": 42, "enabled": True, "font": "MyFont", "position": [0.5, 0.90]},
+            },
+        }
+        second = apply_profile_to_settings(main, default)
+        self.assertEqual(second["title_size"], 64)
+        self.assertEqual(second["overlays"]["title_font_size"], 64)
+        self.assertEqual(second["frame_fill"], "crop")
+        self.assertEqual(second["overlays"]["subtitles"]["size"], 48)
+        self.assertEqual(second["overlays"]["subtitles"]["position"], [0.5, 0.80])
+        # Nested merge must keep font/enabled from the main settings.
+        self.assertTrue(second["overlays"]["subtitles"]["enabled"])
+        self.assertEqual(second["overlays"]["subtitles"]["font"], "MyFont")
 
     def test_profile_round_trip_keeps_text_size_and_position(self) -> None:
         settings = {
@@ -137,6 +196,30 @@ class RenderVariantHelpersTests(unittest.TestCase):
             self.assertEqual(second["frame_fill"], "crop")
             self.assertEqual(second["voice"], "en-GB-RyanNeural")
             self.assertEqual(second["edge_tts_rate"], "+5%")
+
+    def test_second_ratio_without_saved_profile_uses_its_own_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            job = Path(td) / "job"
+            edge = job / "edge_tts_smart_sync"
+            edge.mkdir(parents=True)
+            final = edge / "final_edge_tts_smart_sync.mp4"
+            final.write_bytes(b"v" * 8000)
+            first = {
+                "source": job / "source.mp4",
+                "output_ratio": "16:9",
+                "target_language": "en",
+                "voice": "en-GB-RyanNeural",
+                "title_size": 54,
+                "overlays": {"title_font_size": 54, "subtitles": {"size": 42}},
+            }
+            record_variant(job, first, final, "source", "English")
+
+            second, ratio = prepare_second_ratio(first, job, {})
+            self.assertEqual(ratio, "9:16")
+            self.assertEqual(second["title_size"], 64)
+            self.assertEqual(second["frame_fill"], "crop")
+            self.assertEqual(second["overlays"]["subtitles"]["size"], 48)
+            self.assertEqual(second["voice"], "en-GB-RyanNeural")
 
 
 class RenderOnlyPipelineTests(unittest.TestCase):

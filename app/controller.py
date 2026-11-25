@@ -37,8 +37,9 @@ from recap_subtitles import SubtitleControls
 from subtitle_fonts import latin_fonts, myanmar_fonts
 from subtitle_png import geometry as subtitle_geometry, sample as subtitle_sample
 from preset_manager import PresetManager
-from render_variants import (missing_artifacts, prepare_second_ratio, profile_from_settings,
-                             ratio_key, record_variant, restore_voice_config, variant_filename)
+from render_variants import (default_profile_for_ratio, final_output_filename, missing_artifacts,
+                             prepare_second_ratio, profile_from_settings, ratio_key,
+                             record_variant, restore_voice_config)
 from batch_manager import BatchManager
 from filter_chain import (ASPECT_LOCKS, MAX_CUSTOM_OVERLAYS, build_prefilter, format_time_seconds,
                           normalize_color, normalize_crop, normalize_overlay, overlay_visible_at,
@@ -307,6 +308,8 @@ class App(_AppBase):
         if saved_second not in OUTPUT_RATIOS:
             saved_second = "16:9" if self.output_ratio.get() == "9:16" else "9:16"
         self.second_output_ratio = tk.StringVar(value=saved_second)
+        self.editing_second_ratio = False
+        self._main_ratio_before_style_edit: str | None = None
         self.frame_fill = tk.StringVar(value=FILL_LABELS.get(str(self.cfg.get("frame_fill") or "blur"), FILL_LABELS["blur"]))
         self.quality = tk.StringVar(value=QUALITY_LABELS[video_quality(self.cfg.get("video_quality"))])
         self.source_size = (0, 0)
@@ -708,13 +711,14 @@ class App(_AppBase):
         frame_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         frame_row.columnconfigure(3, weight=1)
         ttk.Label(frame_row, text="Ratio", width=9).grid(row=0, column=0, sticky="w")
-        ratio_combo = ttk.Combobox(frame_row, textvariable=self.output_ratio, values=OUTPUT_RATIOS, state="readonly", width=9)
-        ratio_combo.grid(row=0, column=1, sticky="w")
+        self.main_ratio_combo = ttk.Combobox(frame_row, textvariable=self.output_ratio,
+                                             values=OUTPUT_RATIOS, state="readonly", width=9)
+        self.main_ratio_combo.grid(row=0, column=1, sticky="w")
         ttk.Label(frame_row, text="Fill").grid(row=0, column=2, sticky="e", padx=(10, 6))
         fill_combo = ttk.Combobox(frame_row, textvariable=self.frame_fill, values=tuple(FILL_LABELS.values()),
                                   state="readonly", width=15)
         fill_combo.grid(row=0, column=3, sticky="ew")
-        for combo in (ratio_combo, fill_combo):
+        for combo in (self.main_ratio_combo, fill_combo):
             combo.bind("<<ComboboxSelected>>", lambda _e: self._frame_changed())
         # Video quality: 720p / 480p render several times faster on PCs without an NVIDIA card.
         ttk.Label(frame_row, text="Quality", width=9).grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -731,11 +735,17 @@ class App(_AppBase):
                                                values=OUTPUT_RATIOS, state="readonly", width=9)
         self.second_ratio_combo.grid(row=2, column=2, columnspan=2, sticky="w", pady=(8, 0))
         self.second_ratio_combo.bind("<<ComboboxSelected>>", lambda _e: self._second_ratio_changed())
+        self.style_btn = ttk.Button(frame_row, text="EDIT 2ND STYLE", style="Compact.TButton",
+                                    command=self._toggle_second_style, state="disabled")
+        self.style_btn.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.style_banner = ttk.Label(frame_row, style="Muted.TLabel", text="")
+        self.style_banner.grid(row=4, column=0, columnspan=4, sticky="w", pady=(2, 0))
         self._sync_second_ratio_state()
         ttk.Label(frame_row, style="Muted.TLabel", wraplength=250, justify="left",
                   text="One ratio: START renders once. Two ratios: START renders both; "
-                       "the second uses the same script and voice (no extra API/TTS call)."
-                  ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
+                       "the second uses the same script and voice. Each ratio keeps its own "
+                       "text sizes and positions — use EDIT 2ND STYLE to customize it."
+                  ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         section(3, "Blur Watermark Area")
         blur_row = ttk.Frame(tools)
@@ -1183,9 +1193,32 @@ class App(_AppBase):
         self.start_btn.configure(text=text)
 
     def _sync_second_ratio_state(self) -> None:
-        """The second Ratio selector is only usable in two-ratio mode."""
-        if hasattr(self, "second_ratio_combo"):
-            self.second_ratio_combo.configure(state="readonly" if self.export_two_ratios.get() else "disabled")
+        """The second Ratio selector / style editor is only usable in two-ratio mode."""
+        two = bool(self.export_two_ratios.get())
+        editing = bool(getattr(self, "editing_second_ratio", False))
+        if hasattr(self, "main_ratio_combo") and not editing:
+            self.main_ratio_combo.configure(state="readonly")
+        if hasattr(self, "second_ratio_combo") and not editing:
+            self.second_ratio_combo.configure(state="readonly" if two else "disabled")
+        if hasattr(self, "style_btn"):
+            self.style_btn.configure(state="normal" if two else "disabled")
+        if hasattr(self, "style_banner") and not editing:
+            self.style_banner.configure(text="")
+
+    def _ensure_profile(self, ratio: str) -> None:
+        """Give a ratio its own starting style if the user has not saved one."""
+        key = ratio_key(ratio)
+        profiles = dict(self.cfg.get("ratio_profiles") or {})
+        current = profiles.get(key)
+        if isinstance(current, dict) and current:
+            return
+        profiles[key] = default_profile_for_ratio(ratio)
+        self.cfg["ratio_profiles"] = profiles
+        save_config(self.cfg)
+        self._log(f"🎚️ {ratio} started with its own recommended text sizes / positions.")
+
+    def _ensure_second_profile(self, second: str) -> None:
+        self._ensure_profile(second)
 
     def _second_ratio_changed(self) -> None:
         """Keep the two ratio choices distinct and make the flow visible on the button."""
@@ -1196,11 +1229,64 @@ class App(_AppBase):
             self.second_output_ratio.set(second)
         self.cfg["export_two_ratios"] = bool(self.export_two_ratios.get())
         self.cfg["second_output_ratio"] = second
+        self._ensure_second_profile(second)
         save_config(self.cfg)
         self._sync_second_ratio_state()
         self._update_start_button_label()
         if self.export_two_ratios.get():
             self._log(f"🎬 Two-ratio job: {primary} (full run) + {second} (saved voice, render-only).")
+            self._log("   The second ratio has a separate saved style — click EDIT 2ND STYLE to change it.")
+
+    def _toggle_second_style(self) -> None:
+        if getattr(self, "editing_second_ratio", False):
+            self._done_second_style()
+        else:
+            self._edit_second_style()
+
+    def _edit_second_style(self) -> None:
+        """Temporarily show the second ratio in all style controls, then save it."""
+        if not self.export_two_ratios.get():
+            return
+        main = self._ratio_label(self.output_ratio.get())
+        second = self._ratio_label(self.second_output_ratio.get())
+        if second == main:
+            self._second_ratio_changed()
+            second = self._ratio_label(self.second_output_ratio.get())
+        self._save_ratio_profile(main)          # never lose the main ratio's edits
+        self._ensure_profile(second)            # start from its own recommended style
+        self._main_ratio_before_style_edit = main
+        self.editing_second_ratio = True
+        self.output_ratio.set(second)
+        self._active_ratio_key = ratio_key(second)
+        self._apply_ratio_profile(second, quiet=False)
+        self.main_ratio_combo.configure(state="disabled")
+        self.second_ratio_combo.configure(state="disabled")
+        self.style_btn.configure(text="DONE 2ND STYLE")
+        self.style_banner.configure(
+            text=f"Editing {second} style — adjust Title / Subtitle / Extra Text, then click DONE 2ND STYLE.")
+        self.status.set(f"EDIT {second} STYLE")
+        self._log(f"🎚️ Editing {second} style. Main Ratio {main} will be restored when you click DONE.")
+        self._redraw_editor_items()
+        self._refresh_preview()
+
+    def _done_second_style(self) -> None:
+        """Save the second ratio's style and return the GUI to the main ratio."""
+        if not getattr(self, "editing_second_ratio", False):
+            return
+        second = self._ratio_label(self.output_ratio.get())
+        self._save_ratio_profile(second)
+        main = self._ratio_label(self._main_ratio_before_style_edit or second)
+        self.output_ratio.set(main)
+        self._active_ratio_key = ratio_key(main)
+        self._apply_ratio_profile(main, quiet=True)
+        self.editing_second_ratio = False
+        self._main_ratio_before_style_edit = None
+        self._sync_second_ratio_state()
+        self.style_btn.configure(text="EDIT 2ND STYLE")
+        self.status.set("READY")
+        self._log(f"🎚️ {second} style saved separately; back to main Ratio {main}.")
+        self._redraw_editor_items()
+        self._refresh_preview()
 
     def _output_canvas(self) -> tuple[int, int]:
         """Size of the final frame for the chosen Ratio (Original follows the loaded video)."""
@@ -1212,6 +1298,7 @@ class App(_AppBase):
         previous = self._active_ratio_key
         self._save_ratio_profile(previous)
         self._active_ratio_key = ratio_key(self.output_ratio.get())
+        self._ensure_profile(self.output_ratio.get())
         self._apply_ratio_profile(self.output_ratio.get(), quiet=True)
         if self._ratio_label(self.second_output_ratio.get()) == self._ratio_label(self.output_ratio.get()):
             self._second_ratio_changed()
@@ -2141,6 +2228,8 @@ class App(_AppBase):
     def _start(self) -> None:
         if self.worker and self.worker.is_alive():
             return
+        if getattr(self, "editing_second_ratio", False):
+            self._done_second_style()      # save the 2nd style and restore the main Ratio
         try:
             settings = self._capture_settings()
             if settings.get("export_two_ratios") and settings.get("second_output_ratio") == settings.get("output_ratio"):
@@ -2506,11 +2595,11 @@ class App(_AppBase):
         folder = str(settings.get("final_output_folder") or "").strip()
         suffix = "English" if settings.get("target_language") == "en" else "Myanmar"
         if folder and Path(final).is_file():
-            if render_only:
-                name = variant_filename(source.stem, settings.get("output_ratio", "16:9"), suffix)
-                target = Path(folder) / name
-            else:
-                target = Path(folder) / f"{source.stem}_{suffix}.mp4"  # original first-run filename
+            name = final_output_filename(
+                source.stem, settings.get("output_ratio", "16:9"), suffix,
+                two_ratios=bool(settings.get("export_two_ratios")), render_only=bool(render_only),
+            )
+            target = Path(folder) / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(final, target)
             self._log(f"📤 Final video saved to {target}")
@@ -2546,6 +2635,11 @@ class App(_AppBase):
             ready = not missing_artifacts(self.current_job) and _job_final_output(self.current_job) is not None
         if hasattr(self, "rerender_btn"):
             self.rerender_btn.configure(state="normal" if ready else "disabled")
+        if hasattr(self, "style_btn"):
+            if yes:
+                self.style_btn.configure(state="disabled")
+            else:
+                self._sync_second_ratio_state()
 
     # ==================================================================== V2
     # Presets, viral formats, crop, color, custom overlays, ducking, batch,

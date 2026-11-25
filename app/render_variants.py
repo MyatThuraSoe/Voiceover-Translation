@@ -56,11 +56,52 @@ def canonical_ratio(value: object, fallback: str = "16:9") -> str:
     return fallback
 
 
+# A vertical / square upload needs different text sizes and positions from a
+# 16:9 upload. These are only applied when the user has not saved a style yet.
+RATIO_STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "9:16": {
+        "frame_fill": "crop",
+        "title_size": 64,
+        "title_position": [0.5, 0.08],
+        "extra_text_size": 44,
+        "extra_text_position": [0.5, 0.88],
+        "subtitles": {"size": 48, "position": [0.5, 0.80]},
+    },
+    "1:1": {
+        "frame_fill": "crop",
+        "title_size": 58,
+        "title_position": [0.5, 0.10],
+        "extra_text_size": 40,
+        "extra_text_position": [0.5, 0.86],
+        "subtitles": {"size": 44, "position": [0.5, 0.82]},
+    },
+}
+
+
+def default_profile_for_ratio(ratio: object) -> dict[str, Any]:
+    """Recommended starting style for a ratio that has no saved profile yet."""
+    wanted = canonical_ratio(ratio)
+    profile = copy.deepcopy(RATIO_STYLE_DEFAULTS.get(wanted, {}))
+    profile["output_ratio"] = wanted
+    return profile
+
+
 def variant_filename(source_stem: str, ratio: object, suffix: str = "English") -> str:
     """Name for a ratio-specific copy, e.g. ``video_English_9x16.mp4``."""
     stem = re.sub(r"[^\w\-]+", "_", str(source_stem or "video"), flags=re.UNICODE).strip("_")
     safe_suffix = re.sub(r"[^0-9A-Za-z]+", "_", str(suffix or "English")).strip("_") or "English"
     return f"{stem or 'video'}_{safe_suffix}_{ratio_key(ratio)}.mp4"
+
+
+def final_output_filename(source_stem: str, ratio: object, suffix: str,
+                          *, two_ratios: bool = False, render_only: bool = False) -> str:
+    """User-facing filename. Two-ratio jobs name both files by ratio so there
+    is exactly one output per ratio and no leftover unsuffixed duplicate."""
+    if two_ratios or render_only:
+        return variant_filename(source_stem, ratio, suffix)
+    stem = re.sub(r"[^\w\-]+", "_", str(source_stem or "video"), flags=re.UNICODE).strip("_") or "video"
+    safe_suffix = re.sub(r"[^0-9A-Za-z]+", "_", str(suffix or "English")).strip("_") or "English"
+    return f"{stem}_{safe_suffix}.mp4"
 
 
 def profile_from_settings(settings: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +140,13 @@ def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any])
         if key not in (profile or {}):
             continue
         value = copy.deepcopy(profile[key])
+        # Merge nested style dicts (subtitles, crop, ducking...) so a ratio
+        # profile can change size/position without resetting font or colour.
+        existing = overlays.get(key) if key in overlays else merged.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            combined = dict(existing or {})
+            combined.update(value)
+            value = combined
         if key in ("title_size", "extra_text_size"):
             worker_key = "title_font_size" if key == "title_size" else "extra_text_font_size"
             overlays[worker_key] = value
@@ -202,8 +250,9 @@ def prepare_second_ratio(settings: dict[str, Any], job_dir: Path,
     merged["output_ratio"] = second
     saved_profiles = profiles if isinstance(profiles, dict) else {}
     profile = saved_profiles.get(ratio_key(second)) or saved_profiles.get(second)
-    if isinstance(profile, dict) and profile:
-        merged = apply_profile_to_settings(merged, profile)
+    if not isinstance(profile, dict) or not profile:
+        profile = default_profile_for_ratio(second)
+    merged = apply_profile_to_settings(merged, profile)
     merged["output_ratio"] = second          # never let a legacy profile key win
     return restore_voice_config(job_dir, merged), second
 
