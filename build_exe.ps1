@@ -67,7 +67,7 @@ foreach ($dir in @('jobs', 'logs', 'models', 'userdata')) {
 }
 
 $readme = @'
-RecapUpgrade 2.4.1 - Windows desktop app
+RecapUpgrade 2.5.0 - Windows desktop app
 ======================================
 
 Start:  RecapUpgrade.exe
@@ -115,13 +115,11 @@ Notes
   * Subtitle/title rendering uses Playwright with installed Chrome or Edge.
   * Custom Image Overlays have per-image Start/End times (MM:SS, H:MM:SS or
     seconds; blank End = whole video). "Use preview" fills the current time.
-  * Generate 2 ratios: tick it in Production Tools and pick the second Ratio.
-    START / RESUME becomes START + 2 RATIOS: the first output is a full run, the
-    second is a render-only copy that reuses the same script, timeline and voice.
-    No second Gemini / Whisper / TTS call is made.
-  * EDIT 2ND STYLE temporarily loads the second Ratio into all style controls.
-    Change Title / Subtitle / Extra Text sizes and positions, then click
-    DONE 2ND STYLE to save that Ratio's profile and return to the main Ratio.
+  * Generate 2 videos: open the separate Two-Ratio tab. Video A and Video B
+    each have their own Ratio, Fill, Quality, Zoom, Title / Extra Text sizes and
+    positions, Logo, Subtitle, Crop, Colour and Ducking controls. START 2 VIDEOS
+    runs the planner and voice once; Video B is a render-only copy that reuses
+    the same script, timeline and voice. No second Gemini / Whisper / TTS call.
   * RENDER THIS RATIO (enabled after a job) does the same for the currently
     selected Ratio. Title / subtitle / extra-text sizes and positions are saved
     per ratio in config.json -> ratio_profiles.

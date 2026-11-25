@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "RecapUpgrade"
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.5.0"
 
 
 def is_frozen() -> bool:

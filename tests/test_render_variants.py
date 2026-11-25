@@ -18,8 +18,9 @@ if str(APP) not in sys.path:
 import core
 from render_variants import (apply_profile_to_settings, default_profile_for_ratio,
                              final_output_filename, load_state, missing_artifacts,
-                             prepare_second_ratio, profile_from_settings, ratio_key,
-                             record_variant, restore_voice_config, variant_filename)
+                             prepare_second_ratio, prepare_two_ratio_settings,
+                             profile_from_settings, ratio_key, record_variant,
+                             restore_voice_config, variant_filename)
 
 RATE = 24000
 
@@ -125,6 +126,50 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertEqual(merged["overlays"]["extra_text_font_size"], 58)
         self.assertEqual(merged["extra_text_size"], 58)
         self.assertEqual(merged["overlays"]["subtitles"]["position"], [0.5, 0.84])
+
+    def test_two_ratio_tab_profiles_are_independent(self) -> None:
+        base = {
+            "output_ratio": "16:9",
+            "voice": "en-GB-RyanNeural",
+            "edge_tts_rate": "+5%",
+            "target_language": "en",
+            "overlays": {"title_font_size": 54, "subtitles": {"size": 42, "font": "Segoe UI"}},
+        }
+        first_profile = {
+            "output_ratio": "16:9", "title_size": 54, "frame_fill": "blur",
+            "title_position": [0.5, 0.12],
+        }
+        second_profile = {
+            "output_ratio": "9:16", "title_size": 77, "frame_fill": "crop",
+            "title_position": [0.5, 0.07],
+            "subtitles": {"size": 59, "position": [0.5, 0.83]},
+        }
+        first, second, ratio_a, ratio_b = prepare_two_ratio_settings(base, first_profile, second_profile)
+        self.assertEqual((ratio_a, ratio_b), ("16:9", "9:16"))
+        self.assertEqual(first["title_size"], 54)
+        self.assertEqual(second["title_size"], 77)
+        self.assertEqual(second["overlays"]["title_font_size"], 77)
+        self.assertEqual(second["frame_fill"], "crop")
+        self.assertEqual(second["overlays"]["title_position"], [0.5, 0.07])
+        self.assertEqual(second["overlays"]["subtitles"]["size"], 59)
+        self.assertEqual(second["overlays"]["subtitles"]["position"], [0.5, 0.83])
+        # The shared narration settings are untouched: one API/TTS call only.
+        self.assertEqual(second["voice"], "en-GB-RyanNeural")
+        self.assertEqual(second["edge_tts_rate"], "+5%")
+        self.assertEqual(second["target_language"], "en")
+        self.assertTrue(first["export_two_ratios"])
+        self.assertTrue(second["export_two_ratios"])
+        self.assertEqual(first["second_output_ratio"], "9:16")
+        self.assertEqual(second["second_output_ratio"], "16:9")
+
+    def test_two_ratio_tab_rejects_equal_ratios_and_bad_zoom(self) -> None:
+        base = {"output_ratio": "16:9", "overlays": {}}
+        profile = {"output_ratio": "16:9"}
+        with self.assertRaisesRegex(ValueError, "different ratios"):
+            prepare_two_ratio_settings(base, profile, dict(profile))
+        with self.assertRaisesRegex(ValueError, "Zoom must be between"):
+            prepare_two_ratio_settings(base, {"output_ratio": "16:9", "zoom_factor": 1.9},
+                                       {"output_ratio": "9:16"})
 
     def test_missing_artifacts_and_saved_voice_config(self) -> None:
         with tempfile.TemporaryDirectory() as td:

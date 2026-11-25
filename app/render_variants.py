@@ -236,6 +236,40 @@ def restore_voice_config(job_dir: Path, settings: dict[str, Any]) -> dict[str, A
     return merged
 
 
+def prepare_two_ratio_settings(settings: dict[str, Any], first_profile: dict[str, Any],
+                               second_profile: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    """Build both settings for the dedicated Two-Ratio tab.
+
+    Each panel owns a complete style profile, so neither video can inherit the
+    other's text sizes / positions.  This helper only merges visual settings;
+    voice, rate, language and API configuration stay shared and are copied from
+    ``settings`` unchanged.
+    """
+    base = dict(settings or {})
+    first_profile = dict(first_profile or {})
+    second_profile = dict(second_profile or {})
+    first_ratio = canonical_ratio(first_profile.get("output_ratio") or base.get("output_ratio"), "16:9")
+    fallback = "16:9" if first_ratio != "16:9" else "9:16"
+    second_ratio = canonical_ratio(second_profile.get("output_ratio") or base.get("second_output_ratio"), fallback)
+    if second_ratio == first_ratio:
+        raise ValueError("Two-video mode needs two different ratios. Choose a different Ratio for Video B.")
+
+    first_profile["output_ratio"] = first_ratio
+    second_profile["output_ratio"] = second_ratio
+    first = apply_profile_to_settings(base, first_profile)
+    second = apply_profile_to_settings(base, second_profile)
+    prepared: list[dict[str, Any]] = []
+    for item, ratio, other in ((first, first_ratio, second_ratio), (second, second_ratio, first_ratio)):
+        item["output_ratio"] = ratio
+        item["second_output_ratio"] = other
+        item["export_two_ratios"] = True
+        zoom = float(item.get("zoom_factor", 1.0))
+        if not 1.0 <= zoom <= 1.25:
+            raise ValueError(f"Zoom must be between 1.00 and 1.25 (Ratio {ratio}).")
+        prepared.append(item)
+    return prepared[0], prepared[1], first_ratio, second_ratio
+
+
 def prepare_second_ratio(settings: dict[str, Any], job_dir: Path,
                          profiles: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Build the render-only settings for the second ratio of a two-ratio job."""
