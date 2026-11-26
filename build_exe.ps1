@@ -67,7 +67,7 @@ foreach ($dir in @('jobs', 'logs', 'models', 'userdata')) {
 }
 
 $readme = @'
-RecapUpgrade 2.5.0 - Windows desktop app
+RecapUpgrade 2.6.0 - Windows desktop app
 ======================================
 
 Start:  RecapUpgrade.exe

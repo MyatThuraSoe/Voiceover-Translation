@@ -127,6 +127,32 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertEqual(merged["extra_text_size"], 58)
         self.assertEqual(merged["overlays"]["subtitles"]["position"], [0.5, 0.84])
 
+    def test_profile_round_trip_keeps_logo_width_blur_and_timed_overlays(self) -> None:
+        blur = [{"x": 0.10, "y": 0.20, "w": 0.30, "h": 0.15}]
+        overlays = [
+            {"id": 1, "path": "a.png", "x_percent": 0.8, "y_percent": 0.1,
+             "width_percent": 0.12, "opacity": 0.9, "enabled": True,
+             "start_sec": 5.0, "end_sec": 12.0},
+            {"id": 2, "path": "b.png", "start_sec": 20.0, "end_sec": None},
+        ]
+        profile = profile_from_settings({
+            "output_ratio": "16:9",
+            "overlays": {
+                "logo_width_fraction": 0.23,
+                "blur_boxes": blur,
+                "custom_overlays": overlays,
+            },
+        })
+        self.assertEqual(profile["logo_width_frac"], 0.23)
+        self.assertEqual(profile["blur_boxes"], blur)
+        self.assertEqual(profile["custom_overlays"][0]["start_sec"], 5.0)
+
+        merged = apply_profile_to_settings({"output_ratio": "9:16", "overlays": {}}, profile)
+        self.assertEqual(merged["overlays"]["logo_width_fraction"], 0.23)
+        self.assertEqual(merged["overlays"]["blur_boxes"], blur)
+        self.assertEqual(merged["overlays"]["custom_overlays"][0]["end_sec"], 12.0)
+        self.assertIsNone(merged["overlays"]["custom_overlays"][1]["end_sec"])
+
     def test_two_ratio_tab_profiles_are_independent(self) -> None:
         base = {
             "output_ratio": "16:9",
@@ -161,6 +187,35 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertTrue(second["export_two_ratios"])
         self.assertEqual(first["second_output_ratio"], "9:16")
         self.assertEqual(second["second_output_ratio"], "16:9")
+
+    def test_each_ratio_keeps_its_own_overlay_tools(self) -> None:
+        base = {
+            "output_ratio": "16:9",
+            "voice": "en-GB-RyanNeural",
+            "overlays": {
+                "blur_boxes": [{"x": 0.0, "y": 0.0, "w": 0.1, "h": 0.1}],
+                "custom_overlays": [{"id": 1, "path": "shared.png"}],
+            },
+        }
+        first_profile = {
+            "output_ratio": "16:9",
+            "blur_boxes": [{"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}],
+            "custom_overlays": [{"id": 1, "path": "a.png", "start_sec": 0.0, "end_sec": 6.0}],
+        }
+        second_profile = {
+            "output_ratio": "9:16",
+            "blur_boxes": [],
+            "custom_overlays": [{"id": 1, "path": "b.png", "start_sec": 8.0, "end_sec": None}],
+        }
+        first, second, ratio_a, ratio_b = prepare_two_ratio_settings(base, first_profile, second_profile)
+        self.assertEqual((ratio_a, ratio_b), ("16:9", "9:16"))
+        self.assertEqual(first["overlays"]["blur_boxes"], first_profile["blur_boxes"])
+        self.assertEqual(first["overlays"]["custom_overlays"][0]["path"], "a.png")
+        self.assertEqual(first["overlays"]["custom_overlays"][0]["end_sec"], 6.0)
+        self.assertEqual(second["overlays"]["blur_boxes"], [])
+        self.assertEqual(second["overlays"]["custom_overlays"][0]["path"], "b.png")
+        self.assertEqual(second["overlays"]["custom_overlays"][0]["start_sec"], 8.0)
+        self.assertIsNone(second["overlays"]["custom_overlays"][0]["end_sec"])
 
     def test_two_ratio_tab_rejects_equal_ratios_and_bad_zoom(self) -> None:
         base = {"output_ratio": "16:9", "overlays": {}}

@@ -102,8 +102,25 @@ class TwoRatioTabTests(unittest.TestCase):
         self.assertIn("def profile(self) -> dict:", tab)
         for key in ("title_font_size", "title_position", "extra_text_font_size",
                     "extra_text_position", "subtitles", "crop", "color_correction",
-                    "audio_ducking"):
+                    "audio_ducking", "blur_boxes", "custom_overlays"):
             self.assertIn(key, tab)
+
+    def test_each_ratio_has_a_recap_style_preview(self) -> None:
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        self.assertIn("class RatioPreview(ttk.Frame)", tab)
+        self.assertIn('text=f"Preview {self.letter}', tab)
+        self.assertIn("self.previews: dict[str, RatioPreview]", tab)
+        self.assertIn("self.previews[which] = preview", tab)
+        self.assertIn("preview.schedule_refresh()", tab)
+        self.assertIn("preview_probe_duration(ffprobe, source)", tab)
+        for marker in ("extract_preview_frame(", "overlay_visible_at(", "subtitle_geometry(",
+                       "begin_blur_box", "commit_overlay_times"):
+            self.assertIn(marker, tab)
+
+    def test_two_ratio_start_validates_both_overlay_timing_windows(self) -> None:
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        self.assertIn("panel.commit_overlay_times()", tab)
+        self.assertIn("End must be after Start", tab)
 
 
 if __name__ == "__main__":

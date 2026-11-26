@@ -24,13 +24,14 @@ PROFILE_KEYS = (
     "title_text", "title_size", "title_position",
     "logo_enabled", "logo_path", "logo_width_frac", "logo_opacity", "logo_position",
     "extra_text", "extra_text_size", "extra_text_opacity", "extra_text_position",
-    "subtitles", "crop", "color_correction", "custom_overlays", "audio_ducking",
+    "subtitles", "crop", "color_correction", "custom_overlays", "blur_boxes", "audio_ducking",
 )
 
 # Worker settings use the older "font_size" names inside their overlays dict.
 OVERLAY_PROFILE_MAP = {
     "title_font_size": "title_size",
     "extra_text_font_size": "extra_text_size",
+    "logo_width_fraction": "logo_width_frac",
 }
 
 VOICE_CONFIG_KEYS = (
@@ -134,7 +135,7 @@ def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any])
     overlay_members = {
         "title_text", "title_position", "logo_enabled", "logo_path", "logo_width_frac",
         "logo_opacity", "logo_position", "extra_text", "extra_text_position",
-        "extra_text_opacity", "subtitles", "custom_overlays",
+        "extra_text_opacity", "subtitles", "custom_overlays", "blur_boxes",
     }
     for key in PROFILE_KEYS:
         if key not in (profile or {}):
@@ -150,6 +151,12 @@ def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any])
         if key in ("title_size", "extra_text_size"):
             worker_key = "title_font_size" if key == "title_size" else "extra_text_font_size"
             overlays[worker_key] = value
+            overlays[key] = value
+            merged[key] = value
+        elif key == "logo_width_frac":
+            # Worker reads ``logo_width_fraction`` from overlays; profiles use the
+            # shorter legacy key, so write both and keep the old spelling available.
+            overlays["logo_width_fraction"] = value
             overlays[key] = value
             merged[key] = value
         elif key in overlay_members:
