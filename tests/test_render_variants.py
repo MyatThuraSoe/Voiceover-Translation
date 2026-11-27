@@ -127,6 +127,17 @@ class RenderVariantHelpersTests(unittest.TestCase):
         self.assertEqual(merged["extra_text_size"], 58)
         self.assertEqual(merged["overlays"]["subtitles"]["position"], [0.5, 0.84])
 
+    def test_title_background_survives_ratio_profile(self) -> None:
+        profile = profile_from_settings({
+            "output_ratio": "16:9",
+            "overlays": {"title_font_size": 54, "title_box_enabled": False, "title_box_opacity": 20},
+        })
+        self.assertIs(profile["title_box_enabled"], False)
+        self.assertEqual(profile["title_box_opacity"], 20)
+        merged = apply_profile_to_settings({"output_ratio": "9:16", "overlays": {}}, profile)
+        self.assertIs(merged["overlays"]["title_box_enabled"], False)
+        self.assertEqual(merged["overlays"]["title_box_opacity"], 20)
+
     def test_profile_round_trip_keeps_logo_width_blur_and_timed_overlays(self) -> None:
         blur = [{"x": 0.10, "y": 0.20, "w": 0.30, "h": 0.15}]
         overlays = [

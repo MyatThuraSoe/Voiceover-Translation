@@ -21,7 +21,7 @@ KNOWN_RATIOS = ("16:9", "9:16", "1:1", "Original")
 # They are kept per ratio in config.json -> ratio_profiles.
 PROFILE_KEYS = (
     "output_ratio", "frame_fill", "video_quality", "zoom_factor", "mirror_video",
-    "title_text", "title_size", "title_position",
+    "title_text", "title_size", "title_position", "title_box_enabled", "title_box_opacity",
     "logo_enabled", "logo_path", "logo_width_frac", "logo_opacity", "logo_position",
     "extra_text", "extra_text_size", "extra_text_opacity", "extra_text_position",
     "subtitles", "crop", "color_correction", "custom_overlays", "blur_boxes", "audio_ducking",
@@ -133,7 +133,8 @@ def apply_profile_to_settings(settings: dict[str, Any], profile: dict[str, Any])
         overlays = {}
         merged["overlays"] = overlays
     overlay_members = {
-        "title_text", "title_position", "logo_enabled", "logo_path", "logo_width_frac",
+        "title_text", "title_position", "title_box_enabled", "title_box_opacity",
+        "logo_enabled", "logo_path", "logo_width_frac",
         "logo_opacity", "logo_position", "extra_text", "extra_text_position",
         "extra_text_opacity", "subtitles", "custom_overlays", "blur_boxes",
     }

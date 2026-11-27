@@ -377,6 +377,8 @@ class App(_AppBase):
         # Minimal production editor state. V0.3 sync/mirror/freeze behavior remains hidden/fixed.
         self.title_text = tk.StringVar(value="")
         self.title_size = tk.IntVar(value=int(self.cfg.get("title_font_size", 54)))
+        self.title_box_enabled = tk.BooleanVar(value=bool(self.cfg.get("title_box_enabled", True)))
+        self.title_box_opacity = tk.IntVar(value=max(0, min(100, int(self.cfg.get("title_box_opacity", 57)))))
         self.logo_path = tk.StringVar(value=str(self.cfg.get("logo_path", "")))
         self.logo_enabled = tk.BooleanVar(value=bool(self.cfg.get("logo_enabled", False)))
         self.logo_width_frac = tk.DoubleVar(value=float(self.cfg.get("logo_width_fraction", 0.16)))
@@ -754,7 +756,16 @@ class App(_AppBase):
                                  lambda v: self._int_slider_changed(v, self.title_size, "title_size_label"),
                                  "title_size_label", str(int(self.title_size.get())), pady=(0, 2))
         title_scale.bind("<ButtonRelease-1>", lambda _e: self._redraw_editor_items())
-        ttk.Label(tools, text="Drag the title on the preview to move it", style="Muted.TLabel").grid(row=9, column=0, sticky="w", pady=(0, 10))
+        title_box = ttk.Frame(tools)
+        title_box.grid(row=9, column=0, sticky="ew", pady=(0, 10))
+        title_box.columnconfigure(1, weight=1)
+        ttk.Checkbutton(title_box, text="Background box", variable=self.title_box_enabled).grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(title_box, text="Box opacity %").grid(row=1, column=0, sticky="w", pady=(3, 0))
+        ttk.Spinbox(title_box, from_=0, to=100, width=6, textvariable=self.title_box_opacity).grid(
+            row=1, column=1, sticky="w", pady=(3, 0))
+        ttk.Label(title_box, text="Drag the title on the preview to move it", style="Muted.TLabel").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
 
         ttk.Separator(tools).grid(row=10, column=0, sticky="ew", pady=(2, 10))
         logo_header = ttk.Frame(tools)
@@ -923,6 +934,8 @@ class App(_AppBase):
         self._bind_wheel_recursive(tools, tools_canvas)
         # Job resume / config loads set the IntVars directly; keep the sliders in step.
         self.title_size.trace_add("write", lambda *_a: self._sync_int_slider(self.title_size, self._title_size_scale_var, "title_size_label"))
+        self.title_box_enabled.trace_add("write", lambda *_a: self._title_box_changed())
+        self.title_box_opacity.trace_add("write", lambda *_a: self._title_box_changed())
         self.extra_text_size.trace_add("write", lambda *_a: self._sync_int_slider(self.extra_text_size, self._extra_size_scale_var, "extra_size_label"))
 
         main.add(left, weight=3)
@@ -1221,6 +1234,8 @@ class App(_AppBase):
                 "frame_fill": self._fill_code(),
                 "video_quality": self._quality_code(),
                 "title_size": int(self.title_size.get()),
+                "title_box_enabled": bool(self.title_box_enabled.get()),
+                "title_box_opacity": int(self.title_box_opacity.get()),
                 "extra_text_size": int(self.extra_text_size.get()),
                 "subtitles": self.subtitle_controls.values(),
             }
@@ -1259,11 +1274,11 @@ class App(_AppBase):
             set_var("frame_fill", self._fill_label(str(profile["frame_fill"])))
         if "video_quality" in profile:
             set_var("quality", self._quality_label(str(profile["video_quality"])))
-        for attr in ("zoom_factor", "title_text", "title_size", "extra_text",
+        for attr in ("zoom_factor", "title_text", "title_size", "title_box_opacity", "extra_text",
                      "extra_text_size", "extra_text_opacity", "logo_path"):
             if attr in profile:
                 set_var(attr, profile[attr])
-        for attr in ("mirror_video", "logo_enabled"):
+        for attr in ("mirror_video", "logo_enabled", "title_box_enabled"):
             if attr in profile:
                 set_var(attr, bool(profile[attr]))
         for attr, key_name in (("title_pos", "title_position"), ("logo_pos", "logo_position"),
@@ -1363,8 +1378,26 @@ class App(_AppBase):
             px = ox + float(self.title_pos[0]) * pw
             py = oy + float(self.title_pos[1]) * ph
             fs = max(10, int(self.title_size.get() * pw / self._output_canvas()[0]))
-            c.create_text(px+2, py+2, text=txt, fill="#000000", anchor="center", font=("Myanmar Text", fs, "bold"), width=int(pw*0.82), tags=("editor", "title"))
-            c.create_text(px, py, text=txt, fill="#ffffff", anchor="center", font=("Myanmar Text", fs, "bold"), width=int(pw*0.82), tags=("editor", "title"))
+            font = ("Myanmar Text", fs, "bold")
+            title_items = [
+                c.create_text(px+2, py+2, text=txt, fill="#000000", anchor="center", font=font,
+                              width=int(pw*0.82), tags=("editor", "title")),
+                c.create_text(px, py, text=txt, fill="#ffffff", anchor="center", font=font,
+                              width=int(pw*0.82), tags=("editor", "title")),
+            ]
+            # Recap's final title has a dark Chromium panel. Show the same on/off
+            # choice in the preview with a stippled approximation of its opacity.
+            opacity = max(0, min(100, int(self.title_box_opacity.get()))) if self.title_box_enabled.get() else 0
+            if opacity:
+                bbox = c.bbox(title_items[1])
+                if bbox:
+                    pad = max(4, int(fs * 0.35))
+                    stipple = ("" if opacity >= 100 else "gray75" if opacity >= 66
+                               else "gray50" if opacity >= 33 else "gray25")
+                    rect = c.create_rectangle(bbox[0]-pad, bbox[1]-pad//2, bbox[2]+pad, bbox[3]+pad//2,
+                                              fill="#000000", outline="", stipple=stipple,
+                                              tags=("editor", "title_box"))
+                    c.tag_lower(rect, title_items[0])
 
         extra_txt = self.extra_text.get().strip()
         if extra_txt:
@@ -1476,6 +1509,16 @@ class App(_AppBase):
         if self._quality_code() != "1080":
             self._log(f"🎞️ Quality {self._quality_code()}p: the video parts are made smaller and faster "
                       "(title / logo / subtitle keep their look); the translation and voice are kept.")
+
+    def _title_box_changed(self) -> None:
+        try:
+            self.cfg["title_box_enabled"] = bool(self.title_box_enabled.get())
+            self.cfg["title_box_opacity"] = max(0, min(100, int(self.title_box_opacity.get())))
+        except (ValueError, tk.TclError):
+            return
+        save_config(self.cfg)
+        if hasattr(self, "preview_canvas"):
+            self._redraw_editor_items()
 
     def _subtitle_changed(self) -> None:
         try:
@@ -1938,6 +1981,8 @@ class App(_AppBase):
         self.cfg["logo_position"] = settings["overlays"].get("logo_position", [0.80, 0.06])
         self.cfg["title_position"] = settings["overlays"].get("title_position", [0.50, 0.12])
         self.cfg["title_font_size"] = settings["overlays"].get("title_font_size", 54)
+        self.cfg["title_box_enabled"] = bool(settings["overlays"].get("title_box_enabled", True))
+        self.cfg["title_box_opacity"] = max(0, min(100, int(settings["overlays"].get("title_box_opacity", 57))))
         self.cfg["extra_text_position"] = settings["overlays"].get("extra_text_position", [0.50, 0.84])
         self.cfg["extra_text_font_size"] = settings["overlays"].get("extra_text_font_size", 42)
         self.cfg["extra_text_opacity"] = settings["overlays"].get("extra_text_opacity", 0.65)
@@ -1998,6 +2043,8 @@ class App(_AppBase):
             "title_text": self.title_text.get().strip(),
             "title_position": [float(self.title_pos[0]), float(self.title_pos[1])],
             "title_font_size": int(self.title_size.get()),
+            "title_box_enabled": bool(self.title_box_enabled.get()),
+            "title_box_opacity": max(0, min(100, int(self.title_box_opacity.get()))),
             "title_font_path": title_font,
             # Honour an explicitly configured Myanmar font too; when none is set,
             # the renderer falls back to its curated Myanmar font list.

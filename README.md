@@ -77,7 +77,7 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · S
 | အပေါ် | **Source Video → Browse** နဲ့ video ကို ရွေးပါ။ **Folder** နှိပ်ရင် folder ထဲက video တွေကို တစ်ခုပြီးတစ်ခု လုပ်ပါတယ် (ပြီးပြီးသား video တွေကို ကျော်ပါတယ်)။ **Gemini .env** မှာ `.env` ဖိုင်ကို ရွေးပါ (default က ဒီ folder ထဲက `.env`)။ **Save final to** — folder ရွေးထားရင် ပြီးတဲ့ video ကို `<video နာမည်>_Myanmar.mp4` (သို့) `<video နာမည်>_English.mp4` နဲ့ အဲ့ folder ထဲ ထည့်ပေးပါတယ် (ဗလာထားရင် job folder ထဲမှာပဲ)။ |
 | ဘယ်ဘက် | **Source language** (Auto-detect / English / Chinese / Hindi / Korean / …)၊ **Output** (**Myanmar · translate** သို့မဟုတ် **English · rewrite**)၊ **Narrator Voice** (Myanmar ဆို `my-MM-ThihaNeural` / `my-MM-NilarNeural`၊ English ဆို `en-GB-RyanNeural` အစရှိတဲ့ English အသံများ) နဲ့ **Speed** (−50% … +100%) ကို ရွေးပါ။ အောက်က **Run Logs** မှာ အလုပ်လုပ်နေတာတွေ ပြပါတယ်။ |
 | အလယ် | **Preview** — slider နဲ့ `◀ 5s` / `5s ▶` နဲ့ ကြည့်ချင်တဲ့ အချိန်ကို ရွှေ့ပြီး **Refresh Frame** နှိပ်ပါ။ Title၊ Logo၊ Extra text ကို ဆွဲရွှေ့ပြီး နေရာချလို့ရပါတယ်။ Blur box ကို ဆွဲလို့ရပါတယ်။ |
-| ညာဘက် | **Production Tools** — Zoom (1.00–1.25×)၊ Flip (ဘယ်ညာ ပြောင်းပြန်)၊ Voice vol (50–300%)၊ Short pauses၊ **Ratio** (16:9 / 9:16 / 1:1 / Original) နဲ့ **Fill** (Blur background / Black bars / Crop to fill)၊ **+ Draw Blur Box** / Delete Selected၊ Title (စာ၊ အရွယ်)၊ Logo (ဖိုင်၊ အရွယ်၊ အလင်းဖောက်မှု)၊ Extra Text Box။ |
+| ညာဘက် | **Production Tools** — Zoom (1.00–1.25×)၊ Flip (ဘယ်ညာ ပြောင်းပြန်)၊ Voice vol (50–300%)၊ Short pauses၊ **Ratio** (16:9 / 9:16 / 1:1 / Original) နဲ့ **Fill** (Blur background / Black bars / Crop to fill)၊ **+ Draw Blur Box** / Delete Selected၊ Title (စာ၊ အရွယ်၊ **Background box** ဖွင့်/ပိတ် + Box opacity %)၊ Logo (ဖိုင်၊ အရွယ်၊ အလင်းဖောက်မှု)၊ Extra Text Box။ |
 | အောက်ခြေ | **START / RESUME** — စတယ် (ရပ်ထားတာဆိုရင် ဆက်လုပ်တယ်)။ **STOP SAFELY** — အခု လုပ်နေတဲ့ အဆင့်ပြီးမှ ရပ်ပြီး လုပ်ပြီးသမျှ သိမ်းထားတယ်။ **RENDER THIS RATIO** — ပြီးပြီးသား job ရဲ့ စာသား/အသံ/timeline ကို ပြန်သုံးပြီး ရွေးထားတဲ့ Ratio နဲ့ ထပ်ထုတ်တယ် (API / TTS ပြန်မခေါ်ပါ)။ **Open Job Folder** — ထွက်လာတဲ့ ဖိုင်တွေ ဖွင့်ကြည့်ဖို့။ **Edit Text** — မြန်မာ narration ကို စာကြောင်းလိုက် ပြင်ဖို့ (အောက်မှာ ကြည့်ပါ)။ |
 
 **ထွက်လာတဲ့ ဖိုင်:** `jobs\<video နာမည်>_<code>\edge_tts_smart_sync\final_edge_tts_smart_sync.mp4`
@@ -88,9 +88,12 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · S
 preview အရွယ်ကို ကြိုက်သလို ချဲ့လို့ရပါတယ်။ preview ပေါ်မှာ mouse wheel လှည့်ရင် အချိန်ရွှေ့ပေးပြီး
 slider နဲ့ `◀ 5s` / `5s ▶` နဲ့လည်း ရှာလို့ရပါတယ်။ **Refresh** နှိပ်စရာမလိုဘဲ မြင်ရသလို ဆွဲရွှေ့နိုင်ပါတယ်။
 Title / Extra Text ကို ထွက်မယ့် ဗီဒီယိုနဲ့ အတူတူ Chromium PNG နဲ့ ပြထားလို့ ဖောင့်/အရွယ်/အလင်းအမှောင်
-ကွဲမသွားပါဘူး။ Blur box လည်း preview ပေါ်မှာ တကယ် blur ဖြစ်တာကို မြင်ရပြီး Quality အလိုက် အားညီအောင်
+ကွဲမသွားပါဘူး။ **Background box** ကို Title အတွက် ဖွင့်/ပိတ်လို့ရပြီး opacity ကိုလည်း Subtitle လိုပဲ
+ညှိလို့ရပါတယ်။ Blur box လည်း preview ပေါ်မှာ တကယ် blur ဖြစ်တာကို မြင်ရပြီး Quality အလိုက် အားညီအောင်
 ညှိပေးပါတယ်။ Title, Logo, Extra Text, Subtitle, Crop, Blur box, Custom Image Overlay တွေကို
-မိမိ preview ပေါ်မှာ ဆွဲရွှေ့နေရာချလို့ရပါတယ်။
+မိမိ preview ပေါ်မှာ ဆွဲရွှေ့နေရာချလို့ရပါတယ်။ Subtitle နေရာကို ဆွဲပြီးရင် ထွက်မယ့် ဗီဒီယိုနဲ့
+preview အတိအကျ ကိုက်ညီပါတယ်။ တခြား ratio profile ကို ပြောင်းတဲ့အခါ သိမ်းထားတဲ့ Subtitle
+နေရာ/အရွယ်ကသာ ပြောင်းပြီး ဖောင့်၊ အရောင်၊ box စတာတွေက မပျောက်ပါဘူး။
 scroll လုပ်လို့ရတဲ့ ဘေးက tool တွေမှာ Ratio, Fill, Quality, Zoom, Title / Extra Text အရွယ်နဲ့ နေရာ, Logo,
 Subtitle, Crop, Colour, Ducking, Blur Box နဲ့ အချိန်သတ်မှတ်ထားတဲ့ Custom Image Overlays ကို
 သီးခြား သတ်မှတ်နိုင်ပါတယ်။ Source / ဘာသာ / အသံကတော့

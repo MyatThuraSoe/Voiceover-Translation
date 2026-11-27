@@ -44,8 +44,11 @@ def _browser_launcher():
         return module._browser_candidates
 
 
-def style(values: dict | None = None) -> dict:
-    s = {**DEFAULTS, **(values or {})}
+def style(values: dict | None = None, base: dict | None = None) -> dict:
+    """Normalize a subtitle style. ``base`` holds the current style when a saved
+    ratio profile only overrides a few fields (size / position), so those
+    profiles do not silently reset font, colours or the background box."""
+    s = {**DEFAULTS, **(base or {}), **(values or {})}
     s["size"] = max(12, min(144, int(s["size"])))
     s["width"] = max(.2, min(1., float(s["width"])))
     s["outline_width"] = max(-1, min(12, int(s["outline_width"])))

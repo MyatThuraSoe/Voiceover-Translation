@@ -23,7 +23,7 @@ PRESET_KEYS = (
     "output_ratio", "frame_fill", "video_quality", "zoom_factor", "mirror_video",
     "voice_volume_percent", "short_pauses", "edge_voice", "edge_rate_percent",
     "edge_pitch_hz", "gemini_direction", "tts_engine", "edge_tts_ssml", "target_language",
-    "title_text", "title_size", "title_position",
+    "title_text", "title_size", "title_position", "title_box_enabled", "title_box_opacity",
     "logo_enabled", "logo_path", "logo_width_frac", "logo_opacity", "logo_position",
     "extra_text", "extra_text_size", "extra_text_opacity", "extra_text_position",
     "subtitles", "crop", "blur_boxes", "custom_overlays", "color_correction", "audio_ducking",
@@ -41,6 +41,7 @@ FACTORY_PRESETS: dict[str, dict[str, Any]] = {
             "edge_tts_ssml": False,
             "gemini_direction": "",
             "title_text": "", "title_size": 48, "title_position": [0.5, 0.12],
+            "title_box_enabled": True, "title_box_opacity": 57,
             "logo_enabled": False, "logo_path": "", "logo_width_frac": 0.12,
             "logo_opacity": 0.8, "logo_position": [0.80, 0.06],
             "extra_text": "", "extra_text_size": 32, "extra_text_opacity": 1.0,
@@ -61,6 +62,7 @@ FACTORY_PRESETS: dict[str, dict[str, Any]] = {
             "edge_tts_ssml": False,
             "gemini_direction": "",
             "title_text": "", "title_size": 48, "title_position": [0.5, 0.08],
+            "title_box_enabled": True, "title_box_opacity": 57,
             "logo_enabled": False, "logo_path": "", "logo_width_frac": 0.12,
             "logo_opacity": 0.8, "logo_position": [0.80, 0.03],
             "extra_text": "", "extra_text_size": 32, "extra_text_opacity": 1.0,
@@ -81,6 +83,7 @@ FACTORY_PRESETS: dict[str, dict[str, Any]] = {
             "edge_tts_ssml": False,
             "gemini_direction": "",
             "title_text": "", "title_size": 44, "title_position": [0.5, 0.12],
+            "title_box_enabled": True, "title_box_opacity": 57,
             "logo_enabled": False, "logo_path": "", "logo_width_frac": 0.12,
             "logo_opacity": 0.8, "logo_position": [0.80, 0.06],
             "extra_text": "", "extra_text_size": 30, "extra_text_opacity": 1.0,
@@ -242,6 +245,8 @@ class PresetManager:
             "title_text": str(controller.title_text.get() or ""),
             "title_size": int(var("title_size", 54)),
             "title_position": list(getattr(controller, "title_pos", [0.5, 0.12])),
+            "title_box_enabled": bool(var("title_box_enabled", True)),
+            "title_box_opacity": max(0, min(100, int(var("title_box_opacity", 57)))),
             "logo_enabled": bool(var("logo_enabled", False)),
             "logo_path": str(var("logo_path", "")),
             "logo_width_frac": float(var("logo_width_frac", 0.16)),
@@ -306,8 +311,8 @@ class PresetManager:
         if "video_quality" in settings and hasattr(controller, "_quality_label"):
             set_var("quality", controller._quality_label(settings["video_quality"]))
         for attr in ("zoom_factor", "voice_volume", "edge_rate_percent", "edge_pitch_hz",
-                     "edge_voice", "gemini_direction", "title_text", "title_size", "extra_text",
-                     "extra_text_size", "extra_text_opacity"):
+                     "edge_voice", "gemini_direction", "title_text", "title_size",
+                     "title_box_opacity", "extra_text", "extra_text_size", "extra_text_opacity"):
             if attr in settings:
                 value = settings[attr]
                 if attr == "edge_voice" and hasattr(controller, "_narrator_voices"):
@@ -317,8 +322,13 @@ class PresetManager:
                             value = voices[0]
                     except Exception:
                         pass
+                if attr == "title_box_opacity":
+                    try:
+                        value = max(0, min(100, int(value)))
+                    except (TypeError, ValueError):
+                        value = 57
                 set_var(attr, value)
-        for attr in ("mirror_video", "short_pauses", "logo_enabled"):
+        for attr in ("mirror_video", "short_pauses", "logo_enabled", "title_box_enabled"):
             if attr in settings:
                 set_var(attr, bool(settings[attr]))
         if "logo_path" in settings:

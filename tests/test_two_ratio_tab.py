@@ -134,6 +134,22 @@ class TwoRatioTabTests(unittest.TestCase):
         self.assertIn("panel.commit_overlay_times()", tab)
         self.assertIn("End must be after Start", tab)
 
+    def test_two_ratio_title_box_and_subtitle_placement_parity(self) -> None:
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        controller = (APP / "controller.py").read_text(encoding="utf-8")
+        self.assertIn('ttk.Checkbutton(title, text="Background box", variable=self.title_box_enabled', tab)
+        self.assertIn('self._number(title, 4, "Box opacity %", self.title_box_opacity, 0, 100)', tab)
+        self.assertIn('if "subtitles" in values:', tab)
+        recap_subtitles = (APP / "recap_subtitles.py").read_text(encoding="utf-8")
+        self.assertIn('from subtitle_png import style', recap_subtitles)
+        self.assertIn('saved = style(values, base=current)', recap_subtitles)
+        # subtitle_geometry returns (width, height, x, y). Both previews must
+        # unpack in that order, otherwise the card lands off-screen and is
+        # resized with the wrong aspect ratio.
+        for source in (tab, controller):
+            self.assertIn("width, height, x, y = subtitle_geometry(values, frame)", source)
+        self.assertIn("self.panel.subtitles.position[:] = pos", tab)
+
 
 if __name__ == "__main__":
     unittest.main()

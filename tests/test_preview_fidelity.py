@@ -75,6 +75,41 @@ class SourceTests(unittest.TestCase):
         self.assertIn("configured_font = str(self.cfg.get(\"title_font_path\") or \"\").strip()", controller)
         self.assertIn("bool(latin_font or (configured_font and Path(configured_font).is_file()))", controller)
 
+    def test_title_background_is_adjustable_in_both_tabs(self) -> None:
+        controller = (APP / "controller.py").read_text(encoding="utf-8")
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        core_source = (APP / "core.py").read_text(encoding="utf-8")
+        variants = (APP / "render_variants.py").read_text(encoding="utf-8")
+        for source in (controller, tab):
+            self.assertIn("self.title_box_enabled = tk.BooleanVar", source)
+            self.assertIn("self.title_box_opacity = tk.IntVar", source)
+            self.assertIn('text="Background box"', source)
+            self.assertIn("Box opacity %", source)
+        self.assertIn('"title_box_enabled": bool(self.title_box_enabled.get())', controller)
+        self.assertIn('"title_box_opacity": max(0, min(100, int(self.title_box_opacity.get())))', controller)
+        self.assertIn("box_enabled: bool = True, box_opacity: int = 57", core_source)
+        self.assertIn('"panel_bg_alpha": (max(0, min(100, int(box_opacity))) / 100.0) if box_enabled else 0.0',
+                      core_source)
+        self.assertIn('"title_box_enabled", "title_box_opacity"', variants)
+        self.assertIn("box_enabled=bool(self.panel.title_box_enabled.get())", tab)
+
+    def test_partial_subtitle_profile_keeps_current_style(self) -> None:
+        from subtitle_png import style
+
+        current = style({"font": "MyFont", "box_enabled": False, "box_opacity": 20,
+                         "color": "#123456", "position": [0.2, 0.7]})
+        merged = style({"size": 60, "position": [0.5, 0.83]}, base=current)
+        self.assertEqual(merged["size"], 60)
+        self.assertEqual(merged["position"], [0.5, 0.83])
+        self.assertEqual(merged["font"], "MyFont")
+        self.assertEqual(merged["color"], "#123456")
+        self.assertFalse(merged["box_enabled"])
+        self.assertEqual(merged["box_opacity"], 20)
+
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        self.assertIn('if "subtitles" in values:', tab)
+        self.assertIn('self.subtitles.load_values(dict(values["subtitles"] or {}))', tab)
+
 
 class RendererTests(unittest.TestCase):
     def test_title_panel_is_sized_for_requested_font(self) -> None:
@@ -89,6 +124,19 @@ class RendererTests(unittest.TestCase):
         self.assertGreaterEqual(captured["panel_width"], 1460)
         self.assertGreaterEqual(captured["video_title_panel_height"], 180)
         self.assertGreaterEqual(captured["min_title_font_size"], 8)
+
+    def test_title_background_can_be_disabled_or_scaled(self) -> None:
+        captured: list[dict] = []
+
+        def fake_render(text, out_path, cfg):
+            captured.append(dict(cfg))
+            return out_path
+
+        with patch("services.text_overlay_service.make_video_title_png", side_effect=fake_render):
+            core._render_title_png("Box off", Path("off.png"), "", 54, box_enabled=False)
+            core._render_title_png("Box on", Path("on.png"), "", 54, box_enabled=True, box_opacity=25)
+        self.assertEqual(captured[0]["panel_bg_alpha"], 0.0)
+        self.assertAlmostEqual(captured[1]["panel_bg_alpha"], 0.25)
 
     def test_preview_blur_graph_scales_radius_to_preview_width(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

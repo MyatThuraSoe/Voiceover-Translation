@@ -60,6 +60,14 @@ class PresetTests(unittest.TestCase):
         reloaded = preset_manager.PresetManager(self.root, log=lambda _message: None)
         self.assertEqual(reloaded.get_settings("Blurred")["blur_boxes"], boxes)
 
+    def test_title_background_survives_preset_round_trip(self):
+        manager = preset_manager.PresetManager(self.root, log=lambda _message: None)
+        manager.save_preset("No title box", {"title_box_enabled": False, "title_box_opacity": 20})
+        reloaded = preset_manager.PresetManager(self.root, log=lambda _message: None)
+        settings = reloaded.get_settings("No title box")
+        self.assertIs(settings["title_box_enabled"], False)
+        self.assertEqual(settings["title_box_opacity"], 20)
+
     def test_factory_presets_are_protected(self):
         manager = preset_manager.PresetManager(self.root, log=lambda _message: None)
         names = manager.get_preset_names()

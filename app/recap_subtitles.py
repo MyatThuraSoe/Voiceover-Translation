@@ -84,7 +84,11 @@ class SubtitleControls(ttk.Frame):
 
     def load_values(self, values) -> None:
         """Restore a saved subtitle style, including the draggable position."""
-        saved = style(values)
+        try:
+            current = self.values()
+        except (ValueError, tk.TclError):
+            current = dict(self.saved)
+        saved = style(values, base=current)
         self.position = list(saved["position"])
         for key, var in self.variables.items():
             if key not in saved:

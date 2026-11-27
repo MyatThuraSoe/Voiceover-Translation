@@ -128,6 +128,9 @@ class StylePanel(ttk.Frame):
         self.mirror = tk.BooleanVar(value=False)
         self.title_text = tk.StringVar(value="")
         self.title_size = tk.IntVar(value=54)
+        self.title_box_enabled = tk.BooleanVar(value=bool(app.cfg.get("title_box_enabled", True)))
+        self.title_box_opacity = tk.IntVar(value=int(_clamp(
+            _as_int(app.cfg.get("title_box_opacity"), 57), 0, 100)))
         self.title_pos = [0.50, 0.12]
         self.title_pos_vars = [tk.StringVar(value="0.50"), tk.StringVar(value="0.12")]
         self.logo_enabled = tk.BooleanVar(value=False)
@@ -210,6 +213,9 @@ class StylePanel(ttk.Frame):
         ttk.Entry(title, textvariable=self.title_text).grid(row=0, column=0, sticky="ew", pady=3)
         self._number(title, 1, "Size", self.title_size, 24, 96)
         self._position(title, 2, self.title_pos, self.title_pos_vars)
+        ttk.Checkbutton(title, text="Background box", variable=self.title_box_enabled,
+                        command=self._changed).grid(row=3, column=0, columnspan=3, sticky="w")
+        self._number(title, 4, "Box opacity %", self.title_box_opacity, 0, 100)
 
         row += 1
         extra = ttk.LabelFrame(self, text="Extra Text", padding=(6, 4))
@@ -681,6 +687,8 @@ class StylePanel(ttk.Frame):
             self.mirror.set(bool(values.get("mirror_video", False)))
             self.title_text.set(str(values.get("title_text") or ""))
             self.title_size.set(_as_int(values.get("title_size"), 54))
+            self.title_box_enabled.set(bool(values.get("title_box_enabled", True)))
+            self.title_box_opacity.set(int(_clamp(_as_int(values.get("title_box_opacity"), 57), 0, 100)))
             self.extra_text.set(str(values.get("extra_text") or ""))
             self.extra_size.set(_as_int(values.get("extra_text_size"), 42))
             self.extra_opacity.set(_as_float(values.get("extra_text_opacity"), 0.65))
@@ -728,10 +736,11 @@ class StylePanel(ttk.Frame):
             if self.preview is not None:
                 self.preview.clear_overlay_cache()
             self._rebuild_overlay_rows()
-            try:
-                self.subtitles.load_values(values.get("subtitles") or {})
-            except Exception:
-                pass
+            if "subtitles" in values:
+                try:
+                    self.subtitles.load_values(dict(values["subtitles"] or {}))
+                except Exception:
+                    pass
             self._format_labels()
         finally:
             self._loading = False
@@ -742,6 +751,8 @@ class StylePanel(ttk.Frame):
             "title_text": self.title_text.get().strip(),
             "title_font_size": int(self.title_size.get()),
             "title_position": [float(v) for v in self.title_pos],
+            "title_box_enabled": bool(self.title_box_enabled.get()),
+            "title_box_opacity": max(0, min(100, int(self.title_box_opacity.get()))),
             "logo_enabled": bool(self.logo_enabled.get()),
             "logo_path": self.logo_path.get().strip() if self.logo_enabled.get() else "",
             "logo_width_fraction": float(self.logo_size.get()),
@@ -960,10 +971,12 @@ class RatioPreview(ttk.Frame):
         self._logo_cache.clear()
 
     def _text_overlay_photo(self, kind: str, text: str, size: int, font_path: str, use_font_path: bool,
-                            max_width: int, opacity: float, pw: int):
+                            max_width: int, opacity: float, pw: int,
+                            box_enabled: bool = True, box_opacity: int = 57):
         """Render text through the same Chromium PNG path used by the final render."""
         scale = max(0.05, min(1.0, pw / max(1, self._frame_size[0])))
-        key = (kind, text, size, font_path, use_font_path, max_width, round(opacity, 3), scale)
+        key = (kind, text, size, font_path, use_font_path, max_width, round(opacity, 3), scale,
+               box_enabled, box_opacity)
         photo = self._text_photos.get(key)
         if photo is not None:
             return photo
@@ -973,7 +986,8 @@ class RatioPreview(ttk.Frame):
         try:
             if kind == "title":
                 _render_title_png(text, out, font_path, size, max_width=max_width,
-                                  scale=scale, use_font_path=use_font_path)
+                                  scale=scale, use_font_path=use_font_path,
+                                  box_enabled=box_enabled, box_opacity=box_opacity)
             else:
                 # The final render keeps the extra panel at 0.18 and applies
                 # the user opacity to the whole PNG in FFmpeg. Do the same here.
@@ -1062,8 +1076,11 @@ class RatioPreview(ttk.Frame):
         y = oy + float(self.panel.title_pos[1]) * ph
         size = max(10, round(int(self.panel.title_size.get()) * pw / max(1, self._frame_size[0])))
         font_path, use_font_path = _preview_title_font(self.app)
-        photo = self._text_overlay_photo("title", text, size, font_path, use_font_path,
-                                         int(pw * 0.98), 1.0, pw)
+        photo = self._text_overlay_photo(
+            "title", text, size, font_path, use_font_path, int(pw * 0.98), 1.0, pw,
+            box_enabled=bool(self.panel.title_box_enabled.get()),
+            box_opacity=max(0, min(100, int(self.panel.title_box_opacity.get()))),
+        )
         if photo is not None:
             self.canvas.create_image(x, y, image=photo, anchor="center", tags=("editor", "title"))
             return
@@ -1168,7 +1185,7 @@ class RatioPreview(ttk.Frame):
             self._subtitle_scaled_key = None
         if key != self._subtitle_key or not self._subtitle_path or not Path(self._subtitle_path).is_file():
             return
-        x, y, width, height = subtitle_geometry(values, frame)
+        width, height, x, y = subtitle_geometry(values, frame)
         scale = pw / max(1, frame[0])
         size = (max(1, round(width * scale)), max(1, round(height * scale)))
         scaled_key = (str(self._subtitle_path), size)

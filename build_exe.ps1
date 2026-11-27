@@ -67,7 +67,7 @@ foreach ($dir in @('jobs', 'logs', 'models', 'userdata')) {
 }
 
 $readme = @'
-RecapUpgrade 2.6.3 - Windows desktop app
+RecapUpgrade 2.6.4 - Windows desktop app
 ======================================
 
 Start:  RecapUpgrade.exe
@@ -113,6 +113,8 @@ Program files (read-only)
 Notes
   * First run downloads the Whisper model into the user cache; keep internet on.
   * Subtitle/title rendering uses Playwright with installed Chrome or Edge.
+  * Title has its own Background box checkbox and Box opacity % in both tabs,
+    just like subtitles. Old jobs keep the existing dark panel by default.
   * Custom Image Overlays have per-image Start/End times (MM:SS, H:MM:SS or
     seconds; blank End = whole video). "Use preview" fills the current time.
   * Generate 2 videos: open the separate Two-Ratio tab. Video A and Video B

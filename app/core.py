@@ -915,7 +915,8 @@ def _clamp01(value: Any, default: float = 0.0) -> float:
 
 
 def _render_title_png(text: str, output: Path, font_path: str, font_size: int, max_width: int = 1500,
-                      scale: float = 1.0, use_font_path: bool = False) -> Path:
+                      scale: float = 1.0, use_font_path: bool = False,
+                      box_enabled: bool = True, box_opacity: int = 57) -> Path:
     """Render the title through the shared Python Chromium renderer (Myanmar by default, Latin for English mode)."""
     import sys
     project_root = app_root()
@@ -953,6 +954,9 @@ def _render_title_png(text: str, output: Path, font_path: str, font_size: int, m
         "max_title_lines": 2,
         "title_horizontal_padding": pad_x,
         "title_vertical_padding": pad_y,
+        # 0 removes the dark Chromium panel entirely; otherwise the subtitle-style
+        # percentage is converted to the alpha used by the browser renderer.
+        "panel_bg_alpha": (max(0, min(100, int(box_opacity))) / 100.0) if box_enabled else 0.0,
     }
     if scale < 0.999:   # 720p / 480p quality: radius and stroke are authored at 1080 too
         cfg.update({"panel_radius": round(30 * k), "stroke_px": round(1.6 * k, 2)})
@@ -1086,6 +1090,8 @@ def apply_production_overlays(
             str(overlays.get("title_font_path") or ""), max(10, round(int(overlays.get("title_font_size", 54)) * k)),
             max_width=text_width, scale=k,
             use_font_path=bool(overlays.get("title_use_source_font", False)),
+            box_enabled=bool(overlays.get("title_box_enabled", True)),
+            box_opacity=int(overlays.get("title_box_opacity", 57)),
         )
         title_idx = input_index
         cmd += ["-i", str(title_file)]
