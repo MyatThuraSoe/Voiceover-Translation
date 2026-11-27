@@ -933,17 +933,29 @@ def _render_title_png(text: str, output: Path, font_path: str, font_size: int, m
     if not text:
         raise ValueError("Empty title")
 
+    k = min(1.0, max(0.2, float(scale)))       # pixel sizes are authored on the 1080 canvas
+    size = max(1, int(font_size))
+    pad_x = max(8, round(44 * k))
+    pad_y = max(4, round(18 * k))
+    # The old fixed 980x170 panel wrapped silently and shrank two-line titles.
+    # Size it from the actual output width and requested font so preview and
+    # final agree, and so a two-line title is not clipped by overflow:hidden.
+    panel_width = max(240, min(int(max_width), round(int(max_width) * 0.98)))
+    panel_height = max(round(120 * k), round(size * 1.30 * 2 + 2 * pad_y + 10))
     cfg = {
         "font_path": str(font_path or ""),
         "use_font_path": bool(use_font_path and font_path),
-        "font_size": int(font_size),
+        "font_size": size,
         "max_width": int(max_width),
+        "panel_width": panel_width,
+        "video_title_panel_height": panel_height,
+        "min_title_font_size": min(size, max(8, round(12 * k))),
+        "max_title_lines": 2,
+        "title_horizontal_padding": pad_x,
+        "title_vertical_padding": pad_y,
     }
-    if scale < 0.999:   # 720p / 480p quality: the renderer's own pixel sizes, made for the 1080 frame, shrink too
-        cfg.update({"panel_width": round(980 * scale), "video_title_panel_height": round(170 * scale),
-                    "min_title_font_size": max(10, round(34 * scale)), "panel_radius": round(30 * scale),
-                    "title_horizontal_padding": round(44 * scale), "title_vertical_padding": round(18 * scale),
-                    "stroke_px": round(1.6 * scale, 2)})
+    if scale < 0.999:   # 720p / 480p quality: radius and stroke are authored at 1080 too
+        cfg.update({"panel_radius": round(30 * k), "stroke_px": round(1.6 * k, 2)})
     try:
         return make_video_title_png(text, output, cfg)
     except Exception as exc:
@@ -1103,7 +1115,9 @@ def apply_production_overlays(
 
     graph: list[str] = []
     current = "[0:v]"
-    blur_strength = max(4, min(40, int(overlays.get("blur_strength", 18))))
+    # Blur radius is authored on the 1080 canvas like the text sizes. Without
+    # the quality scale the same number is twice as strong at 720p.
+    blur_strength = max(2, min(40, int(round(max(4, min(40, int(overlays.get("blur_strength", 18)))) * k))))
     # yuv420p chroma planes are half-resolution. Letting FFmpeg inherit the
     # luma radius (for example 18) can exceed the chroma-plane limit (9) and
     # fail only at the final production overlay pass after all parts are done.

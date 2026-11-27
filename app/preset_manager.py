@@ -26,7 +26,7 @@ PRESET_KEYS = (
     "title_text", "title_size", "title_position",
     "logo_enabled", "logo_path", "logo_width_frac", "logo_opacity", "logo_position",
     "extra_text", "extra_text_size", "extra_text_opacity", "extra_text_position",
-    "subtitles", "crop", "custom_overlays", "color_correction", "audio_ducking",
+    "subtitles", "crop", "blur_boxes", "custom_overlays", "color_correction", "audio_ducking",
 )
 
 FACTORY_PRESETS: dict[str, dict[str, Any]] = {
@@ -273,6 +273,7 @@ class PresetManager:
             "edge_tts_ssml": bool(var("edge_tts_ssml", False)),
             **overlays,
             "crop": controller._crop_values(),
+            "blur_boxes": [dict(b) for b in getattr(controller, "blur_boxes", [])],
             "color_correction": controller._color_values(),
             "audio_ducking": controller._ducking_values(),
             "custom_overlays": [dict(o) for o in getattr(controller, "custom_overlays", [])],
@@ -336,6 +337,9 @@ class PresetManager:
             controller.extra_text_pos = list(settings["extra_text_position"])
         if hasattr(controller, "_apply_crop_values") and "crop" in settings:
             controller._apply_crop_values(dict(settings["crop"]))
+        if "blur_boxes" in settings and hasattr(controller, "blur_boxes"):
+            controller.blur_boxes = [dict(b) for b in (settings["blur_boxes"] or []) if isinstance(b, dict)]
+            controller.selected_blur = None
         if hasattr(controller, "_apply_color_values") and "color_correction" in settings:
             controller._apply_color_values(dict(settings["color_correction"]))
         if hasattr(controller, "_apply_ducking_values") and "audio_ducking" in settings:

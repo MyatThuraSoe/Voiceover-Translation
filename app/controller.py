@@ -959,12 +959,15 @@ class App(_AppBase):
 
     @staticmethod
     def _bind_wheel(widget: tk.Misc, canvas: tk.Canvas) -> None:
-        widget.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"), add="+")
+        # Replace, do not stack, so rebuilt rows cannot double-scroll.
+        widget.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
 
     def _bind_wheel_recursive(self, widget: tk.Misc, canvas: tk.Canvas) -> None:
-        # Sliders and combo/spin boxes keep their own wheel behaviour.
-        if not isinstance(widget, (ttk.Scale, ttk.Combobox, ttk.Spinbox)):
-            self._bind_wheel(widget, canvas)
+        # Sliders and combo/spin boxes keep their own wheel behaviour. Preview
+        # canvases handle the wheel themselves (seek), so never hijack them.
+        if isinstance(widget, (tk.Canvas, ttk.Scale, ttk.Combobox, ttk.Spinbox)):
+            return
+        self._bind_wheel(widget, canvas)
         for child in widget.winfo_children():
             self._bind_wheel_recursive(child, canvas)
 
@@ -1273,6 +1276,9 @@ class App(_AppBase):
             set_var("logo_opacity", float(profile["logo_opacity"]))
         if "crop" in profile and hasattr(self, "_apply_crop_values"):
             self._apply_crop_values(dict(profile["crop"] or {}))
+        if "blur_boxes" in profile and hasattr(self, "blur_boxes"):
+            self.blur_boxes = [dict(b) for b in (profile["blur_boxes"] or []) if isinstance(b, dict)]
+            self.selected_blur = None
         if "color_correction" in profile and hasattr(self, "_apply_color_values"):
             self._apply_color_values(dict(profile["color_correction"] or {}))
         if "audio_ducking" in profile and hasattr(self, "_apply_ducking_values"):
@@ -1983,7 +1989,8 @@ class App(_AppBase):
         logo_path = self.logo_path.get().strip() if logo_enabled else ""
         target = self._target_code()
         latin_font = _latin_title_font() if target == "en" else ""
-        title_font = latin_font or str(self.cfg.get("title_font_path", r"C:\Windows\Fonts\mmrtext.ttf"))
+        configured_font = str(self.cfg.get("title_font_path") or "").strip()
+        title_font = latin_font or configured_font or r"C:\Windows\Fonts\mmrtext.ttf"
         overlays = {
             "subtitles": self.subtitle_controls.values(),
             "blur_boxes": [dict(x) for x in self.blur_boxes],
@@ -1992,7 +1999,9 @@ class App(_AppBase):
             "title_position": [float(self.title_pos[0]), float(self.title_pos[1])],
             "title_font_size": int(self.title_size.get()),
             "title_font_path": title_font,
-            "title_use_source_font": bool(latin_font),
+            # Honour an explicitly configured Myanmar font too; when none is set,
+            # the renderer falls back to its curated Myanmar font list.
+            "title_use_source_font": bool(latin_font or (configured_font and Path(configured_font).is_file())),
             "logo_enabled": logo_enabled,
             "logo_path": logo_path,
             "logo_position": [float(self.logo_pos[0]), float(self.logo_pos[1])],

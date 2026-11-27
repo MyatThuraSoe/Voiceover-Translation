@@ -84,9 +84,13 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · S
 
 **Ratio နှစ်ခု တစ်ခါတည်းထုတ်ချင်ရင်:** အပေါ်က **Two-Ratio** tab ကိုဖွင့်ပါ။ ဘယ်ဘက် **Video A**
 နဲ့ ညာဘက် **Video B** မှာ ကိုယ်ပိုင် **Preview A / Preview B** ရှိပြီး preview နဲ့ tool တွေကို
-အတူတူ scroll လုပ်ကြည့်လို့ရပါတယ် — slider နဲ့ `◀ 5s` / `5s ▶` နဲ့ အချိန်ရွှေ့ပြီး **Refresh** နှိပ်ကာ
-ရလဒ်ကို ကြိုကြည့်နိုင်ပါတယ်။ Title, Logo, Extra Text,
-Subtitle, Crop, Blur box, Custom Image Overlay တွေကို မိမိ preview ပေါ်မှာ ဆွဲရွှေ့နေရာချလို့ရပါတယ်။
+အတူတူ scroll လုပ်ကြည့်လို့ရပါတယ်။ **Preview size** slider (Small → Extra large) နဲ့ ဘေးတစ်ခုချင်းစီက
+preview အရွယ်ကို ကြိုက်သလို ချဲ့လို့ရပါတယ်။ preview ပေါ်မှာ mouse wheel လှည့်ရင် အချိန်ရွှေ့ပေးပြီး
+slider နဲ့ `◀ 5s` / `5s ▶` နဲ့လည်း ရှာလို့ရပါတယ်။ **Refresh** နှိပ်စရာမလိုဘဲ မြင်ရသလို ဆွဲရွှေ့နိုင်ပါတယ်။
+Title / Extra Text ကို ထွက်မယ့် ဗီဒီယိုနဲ့ အတူတူ Chromium PNG နဲ့ ပြထားလို့ ဖောင့်/အရွယ်/အလင်းအမှောင်
+ကွဲမသွားပါဘူး။ Blur box လည်း preview ပေါ်မှာ တကယ် blur ဖြစ်တာကို မြင်ရပြီး Quality အလိုက် အားညီအောင်
+ညှိပေးပါတယ်။ Title, Logo, Extra Text, Subtitle, Crop, Blur box, Custom Image Overlay တွေကို
+မိမိ preview ပေါ်မှာ ဆွဲရွှေ့နေရာချလို့ရပါတယ်။
 scroll လုပ်လို့ရတဲ့ ဘေးက tool တွေမှာ Ratio, Fill, Quality, Zoom, Title / Extra Text အရွယ်နဲ့ နေရာ, Logo,
 Subtitle, Crop, Colour, Ducking, Blur Box နဲ့ အချိန်သတ်မှတ်ထားတဲ့ Custom Image Overlays ကို
 သီးခြား သတ်မှတ်နိုင်ပါတယ်။ Source / ဘာသာ / အသံကတော့
@@ -329,9 +333,11 @@ long videos into parts.
    shown in the preview and applied to the final render.
 
  8. **One or two videos** — the **Recap** tab makes one video. For two, open the separate **Two-Ratio** tab:
-    Video A and Video B each have their own Recap-style **Preview A / Preview B** (seek, Refresh, draggable
-    title/logo/text/subtitle/crop/blur/image overlays) with its preview and tools in one scrollable
-    panel. Each panel has independent Ratio, Fill, Quality, Zoom,
+    Video A and Video B each have their own Recap-style **Preview A / Preview B** (wheel/seek, Refresh,
+    draggable title/logo/text/subtitle/crop/blur/image overlays, per-side **Preview size** slider) with
+    its preview and tools in one scrollable panel. Title/Extra Text previews use the same Chromium PNG
+    renderer as the final video, and blur boxes are previewed with quality-scaled strength.
+    Each panel has independent Ratio, Fill, Quality, Zoom,
     Title / Extra Text sizes and positions, Logo, Subtitle, Crop, Colour, Ducking, blur boxes and timed
     Custom Image Overlays controls. **START 2 VIDEOS** runs the planner and
     narration once; Video B is render-only and reuses the saved script, timeline and voice. Each panel's
@@ -379,8 +385,8 @@ Double-click **`RUN.bat`**:
   title, logo, extra text.
 - **START / RESUME** — starts or continues one video in the Recap tab. Open the **Two-Ratio** tab and press
   **START 2 VIDEOS** to generate two videos at once: each side has one scrollable area for both the
-  preview and tools. The second render reuses the saved script/voice (no API or TTS call), and each panel
-  keeps its own sizes and positions.
+  preview and tools, plus its own preview-size slider. The second render reuses the saved script/voice
+  (no API or TTS call), and each panel keeps its own sizes and positions.
   **STOP SAFELY** — stops at a safe point and keeps everything; **RENDER THIS RATIO** — enabled after a
   finished job, recomposes the saved plan/voice for the currently selected Ratio with its own text sizes;
   **Open Job Folder**; **Edit Text** — read each

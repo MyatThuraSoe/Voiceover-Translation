@@ -20,7 +20,8 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from app_paths import app_root, data_root
-from core import OUTPUT_RATIOS, QUALITY_LABELS, output_canvas, probe_video_size
+from core import (_render_extra_text_png, _render_title_png, OUTPUT_RATIOS, QUALITY_LABELS,
+                  output_canvas, probe_video_size)
 from filter_chain import (ASPECT_LOCKS, MAX_CUSTOM_OVERLAYS, build_prefilter, format_time_seconds,
                           normalize_color, normalize_crop, normalize_overlay, overlay_visible_at,
                           parse_time_seconds)
@@ -36,6 +37,9 @@ LANGUAGE_LABELS = {"auto": "Auto-detect", **SOURCE_LANGUAGES}
 TARGET_LABELS = {"mm": "Myanmar  ·  translate", "en": "English  ·  rewrite"}
 FILL_LABELS = {"blur": "Blur background", "black": "Black bars", "crop": "Crop to fill"}
 ASPECT_OPTIONS = tuple(ASPECT_LOCKS.keys())
+PREVIEW_BASE_WIDTH = 640
+PREVIEW_HEIGHTS = (280, 400, 540, 680)
+PREVIEW_SIZE_LABELS = ("Small", "Medium", "Large", "Extra large")
 
 ROOT_DIR = app_root()
 PREVIEW_DIR = data_root() / "logs" / "two_ratio_previews"
@@ -76,6 +80,31 @@ def _fmt_rate(value: object) -> str:
 
 def _fmt_pitch(value: object) -> str:
     return f"{int(round(_as_float(value))):+d}Hz"
+
+
+def _tag_index(tag: str, prefix: str) -> int | None:
+    """Parse ``custom_3`` but never mistake the ``custom_overlay`` marker for an index."""
+    if not tag.startswith(prefix):
+        return None
+    suffix = tag[len(prefix):]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _preview_title_font(app) -> tuple[str, bool]:
+    """Mirror the final renderer's font choice so preview text matches output."""
+    target = str(app._target_code() or "mm")
+    configured = str(app.cfg.get("title_font_path") or "").strip()
+    if target == "en":
+        import os
+        fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        for name in ("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf", "calibrib.ttf", "verdanab.ttf",
+                     "tahomabd.ttf", "segoeui.ttf", "arial.ttf"):
+            candidate = fonts / name
+            if candidate.is_file():
+                return str(candidate), True
+    if configured and Path(configured).is_file():
+        return configured, True
+    return configured, False
 
 
 class StylePanel(ttk.Frame):
@@ -561,7 +590,7 @@ class StylePanel(ttk.Frame):
             "aspect_lock": str(self.crop_aspect.get() or "free"),
         })
 
-    def _apply_crop_values(self, values: dict) -> None:
+    def _apply_crop_values(self, values: dict, *, notify: bool = True, redraw: bool = True) -> None:
         crop = normalize_crop(values)
         self.crop_enabled.set(bool(crop["enabled"]))
         self.crop_x.set(crop["x_percent"])
@@ -569,8 +598,9 @@ class StylePanel(ttk.Frame):
         self.crop_w.set(crop["width_percent"])
         self.crop_h.set(crop["height_percent"])
         self.crop_aspect.set(str(crop.get("aspect_lock") or "free"))
-        self._changed()
-        if self.preview is not None:
+        if notify:
+            self._changed()
+        if redraw and self.preview is not None:
             self.preview.redraw()
 
     def _reset_crop(self) -> None:
@@ -753,9 +783,13 @@ class RatioPreview(ttk.Frame):
         self.duration = 0.0
         self.source_size = (0, 0)
         self.time = tk.DoubleVar(value=float(_as_float(app.cfg.get("preview_seek_seconds"), 1.0)))
+        saved_size = _as_int(((app.cfg.get("two_ratio_preview_zoom") or {}).get(letter)), 1)
+        self.size_index = tk.IntVar(value=int(_clamp(saved_size, 0, len(PREVIEW_HEIGHTS) - 1)))
         self._frame_size = (1920, 1080)
-        self._canvas_size = (420, 160)
+        self._canvas_size = (PREVIEW_BASE_WIDTH, PREVIEW_HEIGHTS[self.size_index.get()])
         self._photo = None
+        self._text_photos: dict[tuple, ImageTk.PhotoImage] = {}
+        self._drag_dirty = False
         self._logo_cache: dict[tuple, tk.PhotoImage] = {}
         self._overlay_cache: dict[tuple, tk.PhotoImage] = {}
         self._overlay_photos: list = []
@@ -779,17 +813,28 @@ class RatioPreview(ttk.Frame):
         box.pack(fill="both", expand=True)
         box.columnconfigure(0, weight=1)
         box.rowconfigure(0, weight=1)
-        self.canvas = tk.Canvas(box, width=420, height=160, bg="#05070a", highlightthickness=1,
-                                highlightbackground="#303744", cursor="crosshair")
+        self.canvas = tk.Canvas(box, width=PREVIEW_BASE_WIDTH, height=self._canvas_size[1], bg="#05070a",
+                                highlightthickness=1, highlightbackground="#303744", cursor="crosshair")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.bind("<ButtonPress-1>", self._press)
         self.canvas.bind("<B1-Motion>", self._motion)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.canvas.bind("<Double-Button-1>", self._double_click)
         self.canvas.bind("<Configure>", self._resized)
+        self.canvas.bind("<MouseWheel>", self._wheel_seek)
+
+        sizer = ttk.Frame(box)
+        sizer.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(sizer, text="Preview size", style="Muted.TLabel").pack(side="left")
+        size_scale = ttk.Scale(sizer, from_=0, to=len(PREVIEW_HEIGHTS) - 1, orient="horizontal",
+                               variable=self.size_index, command=lambda _v: self._size_changed())
+        size_scale.pack(side="left", fill="x", expand=True, padx=(7, 7))
+        size_scale.bind("<ButtonRelease-1>", lambda _e: self._save_preview_size())
+        self.size_label = ttk.Label(sizer, text=self._size_text(), style="Muted.TLabel", width=12)
+        self.size_label.pack(side="right")
 
         seek = ttk.Frame(box)
-        seek.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        seek.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         seek.columnconfigure(2, weight=1)
         ttk.Button(seek, text="◀ 5s", width=5, style="Compact.TButton",
                    command=lambda: self._seek(-5)).grid(row=0, column=0, padx=(0, 5))
@@ -804,7 +849,7 @@ class RatioPreview(ttk.Frame):
                    command=self.refresh).grid(row=0, column=4, padx=(6, 0))
         self.slider.bind("<ButtonRelease-1>", lambda _e: self.refresh())
         self.hint = ttk.Label(box, text="Load a source video to see the frame", style="Muted.TLabel")
-        self.hint.grid(row=2, column=0, sticky="w", pady=(3, 0))
+        self.hint.grid(row=3, column=0, sticky="w", pady=(3, 0))
 
     # -------------------------------------------------------------- geometry
     def _bounds(self) -> tuple[int, int, int, int]:
@@ -819,11 +864,32 @@ class RatioPreview(ttk.Frame):
         ox, oy, width, height = self._bounds()
         return (_clamp(event.x, ox, ox + width), _clamp(event.y, oy, oy + height))
 
+    def _size_text(self) -> str:
+        index = int(_clamp(self.size_index.get(), 0, len(PREVIEW_HEIGHTS) - 1))
+        return f"{PREVIEW_SIZE_LABELS[index]} · {PREVIEW_HEIGHTS[index]}px"
+
+    def _size_changed(self) -> None:
+        self.size_label.configure(text=self._size_text())
+        height = PREVIEW_HEIGHTS[int(_clamp(self.size_index.get(), 0, len(PREVIEW_HEIGHTS) - 1))]
+        self.canvas.configure(height=height)
+        self._canvas_size = (max(1, self.canvas.winfo_width() or PREVIEW_BASE_WIDTH), height)
+        self.redraw()
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(220, self.refresh)
+
+    def _save_preview_size(self) -> None:
+        sizes = dict(self.app.cfg.get("two_ratio_preview_zoom") or {})
+        sizes[self.letter] = int(_clamp(self.size_index.get(), 0, len(PREVIEW_HEIGHTS) - 1))
+        self.app.cfg["two_ratio_preview_zoom"] = sizes
+        self.app.save_cfg()
+
     def _resized(self, event) -> None:
-        size = (event.width, event.height)
+        size = (max(1, event.width - 2), max(1, event.height - 2))
         if size == self._canvas_size:
             return
         self._canvas_size = size
+        self.redraw()
         if self._resize_job is not None:
             self.after_cancel(self._resize_job)
         self._resize_job = self.after(250, self.refresh)
@@ -860,6 +926,9 @@ class RatioPreview(ttk.Frame):
                 ffmpeg, source, float(self.time.get()), float(self.panel.zoom.get()),
                 bool(self.panel.mirror.get()), str(out), width, height,
                 ratio=ratio, fill=self.panel._fill_code(), source_size=effective, prefilter=prefilter,
+                blur_boxes=[dict(b) for b in self.panel.blur_boxes],
+                blur_strength=_as_float(self.app.cfg.get("overlay_blur_strength"), 18),
+                frame_size=self._frame_size,
             )
             self._photo = tk.PhotoImage(file=str(out))
             self.canvas.delete("frame")
@@ -879,14 +948,71 @@ class RatioPreview(ttk.Frame):
         ox, oy, width, height = self._bounds()
         self._draw_crop(ox, oy, width, height)
         self._draw_blur_boxes(ox, oy, width, height)
-        self._draw_title(ox, oy, width, height)
-        self._draw_extra(ox, oy, width, height)
-        self._draw_logo(ox, oy, width, height)
+        # Match the final filter graph: blur → images → title → logo → extra → subtitles.
         self._draw_custom_overlays(ox, oy, width, height)
+        self._draw_title(ox, oy, width, height)
+        self._draw_logo(ox, oy, width, height)
+        self._draw_extra(ox, oy, width, height)
         self._draw_subtitle(ox, oy, width, height)
 
     def clear_overlay_cache(self) -> None:
         self._overlay_cache.clear()
+        self._logo_cache.clear()
+
+    def _text_overlay_photo(self, kind: str, text: str, size: int, font_path: str, use_font_path: bool,
+                            max_width: int, opacity: float, pw: int):
+        """Render text through the same Chromium PNG path used by the final render."""
+        scale = max(0.05, min(1.0, pw / max(1, self._frame_size[0])))
+        key = (kind, text, size, font_path, use_font_path, max_width, round(opacity, 3), scale)
+        photo = self._text_photos.get(key)
+        if photo is not None:
+            return photo
+        if len(self._text_photos) > 24:
+            self._text_photos.clear()
+        out = PREVIEW_DIR / f"text_{self.letter.lower()}_{kind}.png"
+        try:
+            if kind == "title":
+                _render_title_png(text, out, font_path, size, max_width=max_width,
+                                  scale=scale, use_font_path=use_font_path)
+            else:
+                # The final render keeps the extra panel at 0.18 and applies
+                # the user opacity to the whole PNG in FFmpeg. Do the same here.
+                _render_extra_text_png(text, out, size, 0.18, max_width=max_width,
+                                       scale=scale, font_path=font_path, use_font_path=use_font_path)
+            with Image.open(out) as image:
+                rgba = image.convert("RGBA")
+                if opacity < 0.999:
+                    rgba.putalpha(rgba.getchannel("A").point(lambda a: int(a * opacity)))
+                photo = ImageTk.PhotoImage(rgba)
+        except Exception:
+            return None
+        self._text_photos[key] = photo
+        return photo
+
+    def _scaled_photo(self, cache: dict, path: str, width: int, opacity: float, name: str):
+        """Scale an image preview and bake in the same opacity used by the render."""
+        opacity = _clamp(opacity, 0.05, 1.0)
+        key = (path, width, round(opacity, 3))
+        photo = cache.get(key)
+        if photo is not None:
+            return photo
+        if len(cache) > 24:
+            cache.clear()
+        tmp = PREVIEW_DIR / f"{name}_{self.letter.lower()}.png"
+        try:
+            scale_logo_preview(_tool_path(self.app.cfg, "ffmpeg"), path, width, str(tmp))
+            if opacity < 0.999:
+                faded = PREVIEW_DIR / f"{name}_{self.letter.lower()}_fade.png"
+                with Image.open(tmp) as image:
+                    rgba = image.convert("RGBA")
+                    rgba.putalpha(rgba.getchannel("A").point(lambda a: int(a * opacity)))
+                    rgba.save(faded)
+                tmp = faded
+            photo = ImageTk.PhotoImage(file=str(tmp))
+        except Exception:
+            return None
+        cache[key] = photo
+        return photo
 
     # ----------------------------------------------------------- frame items
     def _draw_crop(self, ox: int, oy: int, pw: int, ph: int) -> None:
@@ -934,7 +1060,13 @@ class RatioPreview(ttk.Frame):
             return
         x = ox + float(self.panel.title_pos[0]) * pw
         y = oy + float(self.panel.title_pos[1]) * ph
-        size = max(9, int(int(self.panel.title_size.get()) * pw / max(1, self._frame_size[0])))
+        size = max(10, round(int(self.panel.title_size.get()) * pw / max(1, self._frame_size[0])))
+        font_path, use_font_path = _preview_title_font(self.app)
+        photo = self._text_overlay_photo("title", text, size, font_path, use_font_path,
+                                         int(pw * 0.98), 1.0, pw)
+        if photo is not None:
+            self.canvas.create_image(x, y, image=photo, anchor="center", tags=("editor", "title"))
+            return
         font = (self._font(), size, "bold")
         self.canvas.create_text(x + 2, y + 2, text=text, fill="#000000", anchor="center", font=font,
                                 width=int(pw * 0.82), tags=("editor", "title"))
@@ -947,8 +1079,14 @@ class RatioPreview(ttk.Frame):
             return
         x = ox + float(self.panel.extra_pos[0]) * pw
         y = oy + float(self.panel.extra_pos[1]) * ph
-        size = max(9, int(int(self.panel.extra_size.get()) * pw / max(1, self._frame_size[0])))
         opacity = _clamp(float(self.panel.extra_opacity.get()), 0.10, 1.0)
+        size = max(10, round(int(self.panel.extra_size.get()) * pw / max(1, self._frame_size[0])))
+        font_path, use_font_path = _preview_title_font(self.app)
+        photo = self._text_overlay_photo("extra", text, size, font_path, use_font_path,
+                                         int(pw * 0.78), opacity, pw)
+        if photo is not None:
+            self.canvas.create_image(x, y, image=photo, anchor="center", tags=("editor", "extra_text"))
+            return
         shade = max(140, min(255, int(255 * opacity)))
         font = (self._font(), size, "bold")
         self.canvas.create_text(x + 2, y + 2, text=text, fill="#101010", anchor="center", font=font,
@@ -962,16 +1100,10 @@ class RatioPreview(ttk.Frame):
         if not path or not Path(path).is_file():
             return
         width = max(30, int(pw * float(self.panel.logo_size.get())))
-        key = (path, width)
-        photo = self._logo_cache.get(key)
+        opacity = _clamp(float(self.panel.logo_opacity.get()), 0.10, 1.0)
+        photo = self._scaled_photo(self._logo_cache, path, width, opacity, "logo")
         if photo is None:
-            try:
-                tmp = PREVIEW_DIR / f"logo_{self.letter.lower()}.png"
-                scale_logo_preview(_tool_path(self.app.cfg, "ffmpeg"), path, width, str(tmp))
-                photo = tk.PhotoImage(file=str(tmp))
-                self._logo_cache[key] = photo
-            except Exception:
-                return
+            return
         x = ox + float(self.panel.logo_pos[0]) * pw
         y = oy + float(self.panel.logo_pos[1]) * ph
         self.canvas.create_image(x, y, image=photo, anchor="nw", tags=("editor", "logo"))
@@ -979,7 +1111,6 @@ class RatioPreview(ttk.Frame):
     def _draw_custom_overlays(self, ox: int, oy: int, pw: int, ph: int) -> None:
         self._overlay_photos = []
         now = float(self.time.get())
-        ffmpeg = None
         for i, overlay in enumerate(self.panel.custom_overlays[:MAX_CUSTOM_OVERLAYS]):
             if not overlay.get("enabled", True) or not overlay_visible_at(overlay, now):
                 continue
@@ -988,18 +1119,10 @@ class RatioPreview(ttk.Frame):
             width = max(20, int(float(overlay["width_percent"]) * pw))
             path = str(overlay.get("path") or "")
             tags = ("editor", "custom_overlay", f"custom_{i}")
-            key = (i, path, width)
-            photo = self._overlay_cache.get(key)
-            if photo is None and path and Path(path).is_file():
-                try:
-                    if ffmpeg is None:
-                        ffmpeg = _tool_path(self.app.cfg, "ffmpeg")
-                    tmp = PREVIEW_DIR / f"overlay_{self.letter.lower()}_{i}.png"
-                    scale_logo_preview(ffmpeg, path, width, str(tmp))
-                    photo = tk.PhotoImage(file=str(tmp))
-                    self._overlay_cache[key] = photo
-                except Exception:
-                    photo = None
+            opacity = _as_float(overlay.get("opacity"), 0.9)
+            photo = None
+            if path and Path(path).is_file():
+                photo = self._scaled_photo(self._overlay_cache, path, width, opacity, f"overlay_{i}")
             if photo is not None:
                 self._overlay_photos.append(photo)
                 self.canvas.create_image(x, y, image=photo, anchor="nw", tags=tags)
@@ -1082,8 +1205,22 @@ class RatioPreview(ttk.Frame):
         self._update_time_label()
         self.refresh()
 
+    def _wheel_seek(self, event) -> str:
+        """Wheel over the preview seeks time instead of scrolling the tool column."""
+        step = 5 if event.state & 0x0001 else 1
+        delta = step if event.delta > 0 else -step
+        value = float(self.time.get()) + delta
+        upper = max(0.0, self.duration)
+        self.time.set(_clamp(value, 0.0, max(0.0, upper - 0.05)) if upper else max(0.0, value))
+        self._update_time_label()
+        self.schedule_refresh()
+        return "break"
+
     # ------------------------------------------------------------- drag/edit
     def begin_blur_box(self) -> None:
+        scroller = getattr(self.panel, "scroll_canvas", None)
+        if scroller is not None:
+            scroller.yview_moveto(0.0)
         self.draw_blur = True
         self.canvas.configure(cursor="crosshair")
         self.hint.configure(text=f"Preview {self.letter}: drag a rectangle over the watermark, then release")
@@ -1111,27 +1248,27 @@ class RatioPreview(ttk.Frame):
                     kind, original = "extra_text", list(self.panel.extra_pos)
                 elif tag == "subtitle":
                     kind, original = "subtitle", list(self.panel.subtitles.position)
-                elif tag.startswith("custom_"):
-                    index = int(tag.rsplit("_", 1)[1])
-                    overlay = self.panel.custom_overlays[index]
-                    kind = "custom"
+                elif (idx := _tag_index(tag, "custom_")) is not None and idx < len(self.panel.custom_overlays):
+                    overlay = self.panel.custom_overlays[idx]
+                    index, kind = idx, "custom"
                     original = [float(overlay["x_percent"]), float(overlay["y_percent"])]
-                elif tag.startswith("blur_handle_"):
-                    index = int(tag.rsplit("_", 1)[1])
-                    kind, original = "blur_resize", dict(self.panel.blur_boxes[index])
-                elif tag.startswith("blur_"):
-                    index = int(tag.rsplit("_", 1)[1])
-                    kind, original = "blur_move", dict(self.panel.blur_boxes[index])
-                elif tag.startswith("crop_handle_"):
-                    index = int(tag.rsplit("_", 1)[1])
-                    kind, original = "crop_resize", self.panel._crop_values()
+                elif ((idx := _tag_index(tag, "blur_handle_")) is not None
+                      and idx < len(self.panel.blur_boxes)):
+                    index, kind = idx, "blur_resize"
+                    original = dict(self.panel.blur_boxes[idx])
+                elif (idx := _tag_index(tag, "blur_")) is not None and idx < len(self.panel.blur_boxes):
+                    index, kind = idx, "blur_move"
+                    original = dict(self.panel.blur_boxes[idx])
+                elif (idx := _tag_index(tag, "crop_handle_")) is not None and idx < 8:
+                    index, kind = idx, "crop_resize"
+                    original = self.panel._crop_values()
                 elif tag == "crop_box":
                     kind, original = "crop_move", self.panel._crop_values()
                 if kind:
                     self.panel.selected_blur = index if kind.startswith("blur") else self.panel.selected_blur
                     self.panel.selected_overlay = index if kind == "custom" else self.panel.selected_overlay
                     self._drag = (kind, index, fraction[0], fraction[1], original)
-                    self.canvas.configure(cursor="move")
+                    self.canvas.configure(cursor="fleur")  # Tk has no "move" cursor on Windows
                     return
 
     def _motion(self, event) -> None:
@@ -1184,22 +1321,39 @@ class RatioPreview(ttk.Frame):
             self.panel.blur_boxes[index] = box
         elif kind in ("crop_move", "crop_resize") and isinstance(original, dict):
             crop = dict(original)
+            X, Y = crop["x_percent"], crop["y_percent"]
+            W, H = crop["width_percent"], crop["height_percent"]
             if kind == "crop_move":
-                crop["x_percent"] = _clamp(crop["x_percent"] + dx, 0.0, 1.0 - crop["width_percent"])
-                crop["y_percent"] = _clamp(crop["y_percent"] + dy, 0.0, 1.0 - crop["height_percent"])
+                X = _clamp(X + dx, 0.0, max(0.0, 1.0 - W))
+                Y = _clamp(Y + dy, 0.0, max(0.0, 1.0 - H))
             else:
-                crop["width_percent"] = _clamp(crop["width_percent"] + dx, 0.02, 1.0)
-                crop["height_percent"] = _clamp(crop["height_percent"] + dy, 0.02, 1.0)
+                left, top, right, bottom = X, Y, X + W, Y + H
+                if index in (0, 3, 5):
+                    left = max(0.0, min(right - 0.02, X + dx))
+                if index in (2, 4, 7):
+                    right = min(1.0, max(left + 0.02, X + W + dx))
+                if index in (0, 1, 2):
+                    top = max(0.0, min(bottom - 0.02, Y + dy))
+                if index in (5, 6, 7):
+                    bottom = min(1.0, max(top + 0.02, Y + H + dy))
+                X, Y, W, H = left, top, right - left, bottom - top
                 lock = ASPECT_LOCKS.get(str(crop.get("aspect_lock") or "free"))
                 if lock:
                     fw, fh = self.source_size if self.source_size[0] else (1920, 1080)
-                    actual = (crop["width_percent"] * fw) / max(1.0, crop["height_percent"] * fh)
-                    if actual > lock:
-                        crop["width_percent"] = _clamp(lock * crop["height_percent"] * fh / fw, 0.02, 1.0)
+                    if (W * fw) / max(1.0, H * fh) > lock:
+                        new_w = lock * H * fh / fw
+                        if index in (0, 3, 5):
+                            X = right - new_w
+                        W = new_w
                     else:
-                        crop["height_percent"] = _clamp(crop["width_percent"] * fw / (lock * fh), 0.02, 1.0)
-            self.panel._apply_crop_values(crop)
-        self.panel._changed()
+                        new_h = W * fw / (lock * fh)
+                        if index in (0, 1, 2):
+                            Y = bottom - new_h
+                        H = new_h
+            crop.update({"x_percent": _clamp(X, 0.0, 0.98), "y_percent": _clamp(Y, 0.0, 0.98),
+                         "width_percent": _clamp(W, 0.02, 1.0), "height_percent": _clamp(H, 0.02, 1.0)})
+            self.panel._apply_crop_values(crop, notify=False, redraw=False)
+        self._drag_dirty = True
         self.redraw()
 
     def _release(self, event) -> None:
@@ -1215,7 +1369,7 @@ class RatioPreview(ttk.Frame):
                 self.panel.blur_boxes.append({"x": (left - ox) / pw, "y": (top - oy) / ph,
                                               "w": (right - left) / pw, "h": (bottom - top) / ph})
                 self.panel.selected_blur = len(self.panel.blur_boxes) - 1
-                self.panel._changed()
+                self._drag_dirty = True
             self.draw_blur = False
             self.canvas.configure(cursor="crosshair")
             self._draw_start = None
@@ -1224,19 +1378,21 @@ class RatioPreview(ttk.Frame):
                 self._temp_rect = None
             self.hint.configure(text="Ready · drag title, logo, subtitle, crop, blur or image overlay")
         self._drag = None
+        if self._drag_dirty:
+            self.panel._changed()
+            self._drag_dirty = False
         self.redraw()
 
     def _double_click(self, event) -> None:
         x, y = self._xy(event)
         for item in reversed(self.canvas.find_overlapping(x - 3, y - 3, x + 3, y + 3)):
             for tag in self.canvas.gettags(item):
-                if tag.startswith("blur_"):
-                    index = int(tag.rsplit("_", 1)[1])
-                    if 0 <= index < len(self.panel.blur_boxes):
-                        self.panel.blur_boxes.pop(index)
-                        self.panel.selected_blur = None
-                        self.panel._changed()
-                        self.redraw()
+                index = _tag_index(tag, "blur_")
+                if index is not None and 0 <= index < len(self.panel.blur_boxes):
+                    self.panel.blur_boxes.pop(index)
+                    self.panel.selected_blur = None
+                    self.panel._changed()
+                    self.redraw()
                     return
 
 
@@ -1375,7 +1531,7 @@ class TwoRatioTab(ttk.Frame):
         scroller.rowconfigure(0, weight=1)
         scroller.grid(row=1, column=0, sticky="nsew")
         canvas = tk.Canvas(scroller, bg="#0d0f14", highlightthickness=1, highlightbackground="#303744",
-                           width=420, height=160)
+                           width=PREVIEW_BASE_WIDTH, height=PREVIEW_HEIGHTS[1])
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(scroller, orient="vertical", command=canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")

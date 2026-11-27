@@ -264,7 +264,9 @@ body {{ display:flex; align-items:center; justify-content:center; }}
   const el=document.getElementById('txt');
   const wrap=document.getElementById('wrap');
   let size={int(font_size)};
-  const minSize={int(min_font_size)};
+  // A configured floor above the requested size would disable shrinking and
+  // clip the text behind overflow:hidden. Never grow beyond the request.
+  const minSize=Math.max(1, Math.min({int(min_font_size)}, size));
   const maxLines={int(max_lines)};
   const oneLine={'true' if single_line else 'false'};
   function fits() {{

@@ -53,6 +53,13 @@ class PresetTests(unittest.TestCase):
         self.assertTrue(reloaded.delete_preset("My Shorts"))
         self.assertEqual(reloaded.get_default_name(), "")
 
+    def test_blur_boxes_are_included_in_preset_round_trip(self):
+        manager = preset_manager.PresetManager(self.root, log=lambda _message: None)
+        boxes = [{"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.25}]
+        manager.save_preset("Blurred", {"output_ratio": "16:9", "blur_boxes": boxes})
+        reloaded = preset_manager.PresetManager(self.root, log=lambda _message: None)
+        self.assertEqual(reloaded.get_settings("Blurred")["blur_boxes"], boxes)
+
     def test_factory_presets_are_protected(self):
         manager = preset_manager.PresetManager(self.root, log=lambda _message: None)
         names = manager.get_preset_names()
