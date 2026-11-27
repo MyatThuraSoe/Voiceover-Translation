@@ -83,10 +83,11 @@ Narrator only · Whisper + Gemini · Microsoft Edge TTS (Myanmar / English) · S
 **ထွက်လာတဲ့ ဖိုင်:** `jobs\<video နာမည်>_<code>\edge_tts_smart_sync\final_edge_tts_smart_sync.mp4`
 
 **Ratio နှစ်ခု တစ်ခါတည်းထုတ်ချင်ရင်:** အပေါ်က **Two-Ratio** tab ကိုဖွင့်ပါ။ ဘယ်ဘက် **Video A**
-နဲ့ ညာဘက် **Video B** မှာ ကိုယ်ပိုင် **Preview A / Preview B** ရှိပါတယ် — slider နဲ့ `◀ 5s` / `5s ▶`
-နဲ့ အချိန်ရွှေ့ပြီး **Refresh** နှိပ်ကာ ရလဒ်ကို ကြိုကြည့်နိုင်ပါတယ်။ Title, Logo, Extra Text,
+နဲ့ ညာဘက် **Video B** မှာ ကိုယ်ပိုင် **Preview A / Preview B** ရှိပြီး အောက်က tool တွေကို
+scroll လုပ်ကြည့်လို့ရပါတယ် — slider နဲ့ `◀ 5s` / `5s ▶` နဲ့ အချိန်ရွှေ့ပြီး **Refresh** နှိပ်ကာ
+ရလဒ်ကို ကြိုကြည့်နိုင်ပါတယ်။ Title, Logo, Extra Text,
 Subtitle, Crop, Blur box, Custom Image Overlay တွေကို မိမိ preview ပေါ်မှာ ဆွဲရွှေ့နေရာချလို့ရပါတယ်။
-ဘေးက tool တွေမှာ Ratio, Fill, Quality, Zoom, Title / Extra Text အရွယ်နဲ့ နေရာ, Logo,
+အောက်က scroll လုပ်လို့ရတဲ့ tool တွေမှာ Ratio, Fill, Quality, Zoom, Title / Extra Text အရွယ်နဲ့ နေရာ, Logo,
 Subtitle, Crop, Colour, Ducking, Blur Box နဲ့ အချိန်သတ်မှတ်ထားတဲ့ Custom Image Overlays ကို
 သီးခြား သတ်မှတ်နိုင်ပါတယ်။ Source / ဘာသာ / အသံကတော့
 နှစ်ခုလုံးအတွက် မျှသုံးပါတယ်။ **START 2 VIDEOS** ကိုနှိပ်ရင် စာသားနဲ့ အသံကို တစ်ကြိမ်ပဲ
@@ -329,7 +330,8 @@ long videos into parts.
 
  8. **One or two videos** — the **Recap** tab makes one video. For two, open the separate **Two-Ratio** tab:
     Video A and Video B each have their own Recap-style **Preview A / Preview B** (seek, Refresh, draggable
-    title/logo/text/subtitle/crop/blur/image overlays) plus independent Ratio, Fill, Quality, Zoom,
+    title/logo/text/subtitle/crop/blur/image overlays) with one clearly scrollable style panel directly
+    below it. Each panel has independent Ratio, Fill, Quality, Zoom,
     Title / Extra Text sizes and positions, Logo, Subtitle, Crop, Colour, Ducking, blur boxes and timed
     Custom Image Overlays controls. **START 2 VIDEOS** runs the planner and
     narration once; Video B is render-only and reuses the saved script, timeline and voice. Each panel's
@@ -376,8 +378,9 @@ Double-click **`RUN.bat`**:
 - **Production Tools** on the right: Zoom, Flip, Voice vol, Short pauses, Ratio + Fill, blur,
   title, logo, extra text.
 - **START / RESUME** — starts or continues one video in the Recap tab. Open the **Two-Ratio** tab and press
-  **START 2 VIDEOS** to generate two videos at once: each side has its own preview and tools, the second
-  render reuses the saved script/voice (no API or TTS call), and each panel keeps its own sizes and positions.
+  **START 2 VIDEOS** to generate two videos at once: each side has a fixed preview and a scrollable
+  style panel. The second render reuses the saved script/voice (no API or TTS call), and each panel
+  keeps its own sizes and positions.
   **STOP SAFELY** — stops at a safe point and keeps everything; **RENDER THIS RATIO** — enabled after a
   finished job, recomposes the saved plan/voice for the currently selected Ratio with its own text sizes;
   **Open Job Folder**; **Edit Text** — read each

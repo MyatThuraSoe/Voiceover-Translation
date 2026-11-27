@@ -88,6 +88,7 @@ class StylePanel(ttk.Frame):
         self.letter = letter
         self.on_change = on_change
         self.preview: RatioPreview | None = None
+        self.scroll_canvas = None
         self._loading = False
         self._labels: list[tuple[tk.Variable, ttk.Label, str]] = []
 
@@ -138,12 +139,11 @@ class StylePanel(ttk.Frame):
 
     # ------------------------------------------------------------------ build
     def _build(self) -> None:
-        ttk.Label(self, text=self.name, font=("Segoe UI Semibold", 12)).grid(row=0, column=0, sticky="w")
-        ttk.Label(self, text="Drag items on the preview above", style="Muted.TLabel").grid(
-            row=1, column=0, sticky="w")
-        ttk.Separator(self).grid(row=2, column=0, sticky="ew", pady=(4, 8))
+        ttk.Label(self, text="Style tools · scroll for more · drag items on the preview above",
+                  style="Muted.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Separator(self).grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
-        row = 3
+        row = 2
         video = ttk.LabelFrame(self, text="Video", padding=(6, 4))
         video.grid(row=row, column=0, sticky="ew", pady=(0, 8))
         video.columnconfigure(1, weight=1)
@@ -472,6 +472,9 @@ class StylePanel(ttk.Frame):
             self._overlay_window_hint(i)
             ttk.Label(frame, text="Position: drag on the preview above", style="Muted.TLabel").grid(
                 row=6, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        if self.scroll_canvas is not None:
+            for child in host.winfo_children():
+                self.app._bind_wheel_recursive(child, self.scroll_canvas)
 
     def _overlay_toggle(self, index: int) -> None:
         if not (0 <= index < len(self.custom_overlays)) or index >= len(self._overlay_enabled_vars):
@@ -751,7 +754,7 @@ class RatioPreview(ttk.Frame):
         self.source_size = (0, 0)
         self.time = tk.DoubleVar(value=float(_as_float(app.cfg.get("preview_seek_seconds"), 1.0)))
         self._frame_size = (1920, 1080)
-        self._canvas_size = (480, 270)
+        self._canvas_size = (420, 160)
         self._photo = None
         self._logo_cache: dict[tuple, tk.PhotoImage] = {}
         self._overlay_cache: dict[tuple, tk.PhotoImage] = {}
@@ -776,7 +779,7 @@ class RatioPreview(ttk.Frame):
         box.pack(fill="both", expand=True)
         box.columnconfigure(0, weight=1)
         box.rowconfigure(0, weight=1)
-        self.canvas = tk.Canvas(box, width=480, height=270, bg="#05070a", highlightthickness=1,
+        self.canvas = tk.Canvas(box, width=420, height=160, bg="#05070a", highlightthickness=1,
                                 highlightbackground="#303744", cursor="crosshair")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.bind("<ButtonPress-1>", self._press)
@@ -1290,40 +1293,38 @@ class TwoRatioTab(ttk.Frame):
         self.voice_combo.grid(row=2, column=6, sticky="ew", pady=3)
 
         voice = ttk.Frame(top)
-        voice.grid(row=3, column=0, columnspan=7, sticky="ew", pady=(6, 0))
-        voice.columnconfigure(1, weight=1)
-        voice.columnconfigure(4, weight=1)
-        ttk.Label(voice, text="Speed", width=8).grid(row=0, column=0, sticky="w")
+        voice.grid(row=3, column=0, columnspan=7, sticky="ew", pady=(4, 0))
+        voice.columnconfigure(2, weight=1)
+        voice.columnconfigure(5, weight=1)
+        ttk.Checkbutton(voice, text="Natural pauses (SSML)", variable=self.app.edge_tts_ssml,
+                        command=self._engine_changed).grid(row=0, column=0, sticky="w")
+        ttk.Label(voice, text="Speed", width=6).grid(row=0, column=1, sticky="w", padx=(8, 3))
         ttk.Scale(voice, from_=-50, to=100, orient="horizontal", variable=self.app.edge_rate_percent,
-                  command=self._rate_changed).grid(row=0, column=1, sticky="ew")
+                  command=self._rate_changed).grid(row=0, column=2, sticky="ew")
         self.rate_label = ttk.Label(voice, text=_fmt_rate(self.app.edge_rate_percent.get()), width=7)
-        self.rate_label.grid(row=0, column=2, padx=(6, 0))
-        ttk.Label(voice, text="Pitch", width=8).grid(row=0, column=3, sticky="w", padx=(10, 0))
+        self.rate_label.grid(row=0, column=3, padx=(5, 0))
+        ttk.Label(voice, text="Pitch", width=6).grid(row=0, column=4, sticky="w", padx=(10, 3))
         ttk.Scale(voice, from_=-50, to=50, orient="horizontal", variable=self.app.edge_pitch_hz,
-                  command=self._pitch_changed).grid(row=0, column=4, sticky="ew")
-        self.pitch_label = ttk.Label(voice, text=_fmt_pitch(self.app.edge_pitch_hz.get()), width=8)
-        self.pitch_label.grid(row=0, column=5, padx=(6, 0))
-        ttk.Label(voice, text="Engine").grid(row=0, column=6, sticky="w", padx=(10, 0))
+                  command=self._pitch_changed).grid(row=0, column=5, sticky="ew")
+        self.pitch_label = ttk.Label(voice, text=_fmt_pitch(self.app.edge_pitch_hz.get()), width=7)
+        self.pitch_label.grid(row=0, column=6, padx=(5, 0))
+        ttk.Label(voice, text="Engine").grid(row=0, column=7, sticky="w", padx=(10, 3))
         engine = ttk.Combobox(voice, textvariable=self.app.tts_engine_label, state="readonly",
-                              values=tuple(ENGINE_LABELS.values()), width=20)
-        engine.grid(row=0, column=7, sticky="w")
+                              values=tuple(ENGINE_LABELS.values()), width=18)
+        engine.grid(row=0, column=8, sticky="w")
         engine.bind("<<ComboboxSelected>>", lambda _e: self._engine_changed())
         ttk.Button(voice, text="▶ Preview Voice", style="Compact.TButton",
-                   command=self.app._preview_voice).grid(row=1, column=1, sticky="w", pady=(4, 0))
-        ttk.Checkbutton(voice, text="Natural pauses (SSML)", variable=self.app.edge_tts_ssml,
-                        command=self._engine_changed).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Label(voice, text="Voice vol", width=8).grid(row=1, column=3, sticky="w", padx=(10, 0), pady=(4, 0))
-        ttk.Spinbox(voice, from_=50, to=300, width=7, textvariable=self.app.voice_volume,
-                    command=self._engine_changed).grid(row=1, column=4, sticky="w", pady=(4, 0))
+                   command=self.app._preview_voice).grid(row=0, column=9, padx=(8, 0))
+        ttk.Label(voice, text="Voice vol", width=8).grid(row=0, column=10, sticky="w", padx=(10, 3))
+        ttk.Spinbox(voice, from_=50, to=300, width=6, textvariable=self.app.voice_volume,
+                    command=self._engine_changed).grid(row=0, column=11, sticky="w")
 
-        ttk.Label(top, style="Muted.TLabel", wraplength=980, justify="left",
-                  text="One planner run + one narration voice are shared. Each side has its own "
-                       "preview and style tools. Video A renders first; Video B reuses the saved "
-                       "script and audio and only recomposes the picture. Detailed logs stay on the Recap tab."
-                  ).grid(row=4, column=0, columnspan=7, sticky="w", pady=(5, 0))
-
-        panes = ttk.PanedWindow(self, orient="horizontal")
-        panes.grid(row=1, column=0, sticky="nsew", padx=8)
+        content = ttk.Frame(self)
+        content.grid(row=1, column=0, sticky="nsew", padx=8, pady=(2, 0))
+        content.columnconfigure(0, weight=1)
+        content.columnconfigure(2, weight=1)
+        content.rowconfigure(0, weight=1)
+        ttk.Separator(content, orient="vertical").grid(row=0, column=1, sticky="ns", padx=7)
 
         profiles = self.app.cfg.get("ratio_profiles") or {}
         first_ratio = self.app._ratio_label(self.app.cfg.get("output_ratio") or "16:9")
@@ -1332,11 +1333,11 @@ class TwoRatioTab(ttk.Frame):
             second_ratio = "16:9" if first_ratio != "16:9" else "9:16"
 
         self.panel_a, host_a, canvas_a, side_a = self._make_side(
-            panes, "a", "🎬 Video A — first render", first_ratio, profiles)
+            content, "a", "🎬 Video A — first render", first_ratio, profiles)
         self.panel_b, host_b, canvas_b, side_b = self._make_side(
-            panes, "b", "🎬 Video B — second render", second_ratio, profiles)
-        panes.add(side_a, weight=1)
-        panes.add(side_b, weight=1)
+            content, "b", "🎬 Video B — second render", second_ratio, profiles)
+        side_a.grid(row=0, column=0, sticky="nsew")
+        side_b.grid(row=0, column=2, sticky="nsew")
         self.app._bind_wheel_recursive(host_a, canvas_a)
         self.app._bind_wheel_recursive(host_b, canvas_b)
 
@@ -1357,15 +1358,26 @@ class TwoRatioTab(ttk.Frame):
         ttk.Label(bottom, textvariable=self.app.job_display, style="Muted.TLabel").grid(
             row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
-    def _make_side(self, panes, which: str, name: str, ratio: str, profiles: dict):
-        """Create preview + scrollable style tools for one side of the split."""
-        side = ttk.PanedWindow(panes, orient="vertical")
-        scroll = ttk.Frame(side)
-        scroll.rowconfigure(0, weight=1)
-        scroll.columnconfigure(0, weight=1)
-        canvas = tk.Canvas(scroll, bg="#0d0f14", highlightthickness=0, width=430)
+    def _make_side(self, master, which: str, name: str, ratio: str, profiles: dict):
+        """Build one ratio column: a fixed preview above one clearly scrollable tool area."""
+        side = ttk.Frame(master)
+        side.columnconfigure(0, weight=1)
+        side.rowconfigure(0, weight=0)
+        side.rowconfigure(1, weight=0)
+        side.rowconfigure(2, weight=1)
+
+        head = ttk.Frame(side)
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(head, text=name, font=("Segoe UI Semibold", 11)).pack(side="left")
+        ttk.Label(head, text="scroll tools ↓", style="Muted.TLabel").pack(side="right")
+
+        tools = ttk.Frame(side)
+        tools.columnconfigure(0, weight=1)
+        tools.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(tools, bg="#0d0f14", highlightthickness=1, highlightbackground="#303744",
+                           width=420, height=160)
         canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(scroll, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(tools, orient="vertical", command=canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
         inner = ttk.Frame(canvas)
@@ -1376,12 +1388,13 @@ class TwoRatioTab(ttk.Frame):
 
         panel = StylePanel(inner, app=self.app, name=name, ratio=ratio, letter=which.upper(),
                            on_change=lambda: self._panel_changed(which))
-        panel.pack(fill="both", expand=True)
+        panel.scroll_canvas = canvas
+        panel.pack(fill="x")
         preview = RatioPreview(side, app=self.app, panel=panel, letter=which.upper())
         panel.preview = preview
         self.previews[which] = preview
-        side.add(preview, weight=2)
-        side.add(scroll, weight=3)
+        preview.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        tools.grid(row=2, column=0, sticky="nsew")
         panel.load_profile(profiles.get(ratio_key(ratio)) or {})
         return panel, inner, canvas, side
 
@@ -1420,7 +1433,7 @@ class TwoRatioTab(ttk.Frame):
         try:
             ffprobe = _tool_path(self.app.cfg, "ffprobe")
             self.source_size = probe_video_size(ffprobe, source)
-            duration = preview_probe_duration(ffprobe, source)
+            duration = probe_duration(ffprobe, source)
             for preview in self.previews.values():
                 preview.source_size = self.source_size
                 preview.duration = duration

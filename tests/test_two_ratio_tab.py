@@ -112,10 +112,21 @@ class TwoRatioTabTests(unittest.TestCase):
         self.assertIn("self.previews: dict[str, RatioPreview]", tab)
         self.assertIn("self.previews[which] = preview", tab)
         self.assertIn("preview.schedule_refresh()", tab)
-        self.assertIn("preview_probe_duration(ffprobe, source)", tab)
+        self.assertIn("probe_duration(ffprobe, source)", tab)
         for marker in ("extract_preview_frame(", "overlay_visible_at(", "subtitle_geometry(",
                        "begin_blur_box", "commit_overlay_times"):
             self.assertIn(marker, tab)
+
+    def test_two_ratio_layout_is_plain_grid_with_one_scroller_per_side(self) -> None:
+        tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")
+        self.assertNotIn("ttk.PanedWindow", tab)
+        self.assertIn('ttk.Separator(content, orient="vertical")', tab)
+        self.assertIn('head.grid(row=0, column=0, sticky="ew"', tab)
+        self.assertIn('preview.grid(row=1, column=0, sticky="ew"', tab)
+        self.assertIn('tools.grid(row=2, column=0, sticky="nsew"', tab)
+        self.assertIn('scrollbar.grid(row=0, column=1, sticky="ns"', tab)
+        self.assertIn("self.app._bind_wheel_recursive(host_a, canvas_a)", tab)
+        self.assertIn("self.app._bind_wheel_recursive(host_b, canvas_b)", tab)
 
     def test_two_ratio_start_validates_both_overlay_timing_windows(self) -> None:
         tab = (APP / "two_ratio_tab.py").read_text(encoding="utf-8")

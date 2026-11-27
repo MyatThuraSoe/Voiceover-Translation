@@ -11,7 +11,7 @@
 ; is intentionally left in place when the app is uninstalled.
 
 #define MyAppName "RecapUpgrade"
-#define MyAppVersion "2.6.0"
+#define MyAppVersion "2.6.1"
 #define MyAppPublisher "RecapUpgrade"
 #define MyAppExeName "RecapUpgrade.exe"
 #define MyAppId "{{8F0B4E8E-5A4C-4F2B-9E2E-6C1D7A3B9F10}"
@@ -41,7 +41,7 @@ MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion=2.6.0.0
+VersionInfoVersion=2.6.1.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Setup
 VersionInfoProductName={#MyAppName}
