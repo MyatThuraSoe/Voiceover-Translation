@@ -1359,25 +1359,25 @@ class TwoRatioTab(ttk.Frame):
             row=1, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
     def _make_side(self, master, which: str, name: str, ratio: str, profiles: dict):
-        """Build one ratio column: a fixed preview above one clearly scrollable tool area."""
+        """Build one ratio column: preview and tools share one scrollable area."""
         side = ttk.Frame(master)
         side.columnconfigure(0, weight=1)
         side.rowconfigure(0, weight=0)
-        side.rowconfigure(1, weight=0)
-        side.rowconfigure(2, weight=1)
+        side.rowconfigure(1, weight=1)
 
         head = ttk.Frame(side)
         head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         ttk.Label(head, text=name, font=("Segoe UI Semibold", 11)).pack(side="left")
-        ttk.Label(head, text="scroll tools ↓", style="Muted.TLabel").pack(side="right")
+        ttk.Label(head, text="scroll preview + tools ↓", style="Muted.TLabel").pack(side="right")
 
-        tools = ttk.Frame(side)
-        tools.columnconfigure(0, weight=1)
-        tools.rowconfigure(0, weight=1)
-        canvas = tk.Canvas(tools, bg="#0d0f14", highlightthickness=1, highlightbackground="#303744",
+        scroller = ttk.Frame(side)
+        scroller.columnconfigure(0, weight=1)
+        scroller.rowconfigure(0, weight=1)
+        scroller.grid(row=1, column=0, sticky="nsew")
+        canvas = tk.Canvas(scroller, bg="#0d0f14", highlightthickness=1, highlightbackground="#303744",
                            width=420, height=160)
         canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(tools, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(scroller, orient="vertical", command=canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.configure(yscrollcommand=scrollbar.set)
         inner = ttk.Frame(canvas)
@@ -1389,12 +1389,11 @@ class TwoRatioTab(ttk.Frame):
         panel = StylePanel(inner, app=self.app, name=name, ratio=ratio, letter=which.upper(),
                            on_change=lambda: self._panel_changed(which))
         panel.scroll_canvas = canvas
-        panel.pack(fill="x")
-        preview = RatioPreview(side, app=self.app, panel=panel, letter=which.upper())
+        preview = RatioPreview(inner, app=self.app, panel=panel, letter=which.upper())
         panel.preview = preview
         self.previews[which] = preview
-        preview.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-        tools.grid(row=2, column=0, sticky="nsew")
+        preview.pack(fill="x", pady=(0, 8))
+        panel.pack(fill="x")
         panel.load_profile(profiles.get(ratio_key(ratio)) or {})
         return panel, inner, canvas, side
 
